@@ -4,7 +4,7 @@
 
 ## 简介
 
-XMAPort 是一个面向 HyperOS (Android 15/16) 的自动化 ROM 移植工具。只需提供源设备（Source）与目标设备（Target）的官方 ROM 完整包直链，即可一键完成「下载 → 解压 → payload 解包 → 镜像解包 → 分区迁移 → 重打包」全流程，输出可刷入目标机的镜像文件。
+XMAPort 是一个面向 Xiaomi手机的，用于 HyperOS (Android 15/16) 的自动化 ROM 移植工具。只需提供源设备（Source）与目标设备（Target）的官方 ROM 完整包直链，即可一键完成「下载 → 解压 → payload 解包 → 镜像解包 → 分区迁移 → 重打包」全流程，输出可刷入目标机的镜像文件。
 
 ## 功能特性
 
@@ -76,7 +76,7 @@ XMAPort 是一个面向 HyperOS (Android 15/16) 的自动化 ROM 移植工具。
 
 ### build.prop 补丁列表
 
-`[packing]` 段末尾可直接追加 `persist.vendor.*` / `ro.vendor.*` 属性行，打包时自动写入系统 build.prop。内置示例：夜间充电、快充加速、电池健康、极致省电、高帧率、低亮度 HBM 等增强项（来自 `device/xiaomi/mivendor` 公共配置）。
+`[packing]` 段末尾可直接追加 `persist.vendor.*` / `ro.vendor.*` 属性行，打包时自动写入系统 build.prop。内置示例：夜间充电（来自 `device/xiaomi/mivendor` 公共配置）。
 
 ## 工作流程（7 步）
 
@@ -145,11 +145,11 @@ XMAPort/
 - `LICENSE-GPL-2.0.txt` — 对应 aria2c 等 GPL v2 组件
 - `LICENSE-LGPL-2.1.txt` — 对应 7-Zip
 
-> 注：`extract_img.py` 通过 `import` 使用了 AGPL-3.0 协议的 `zero\imgextractor.py`，依据 AGPL 的传染性约定，本仓库 Python 部分建议按 AGPL-3.0 共同发布，使用者自行评估。
+
 
 ## 免责声明
 
-- 本工具仅用于个人学习与测试研究，请使用备用机型操作
+- 本工具仅用于个人学习与测试研究，没有也不会对Xiaomi HyperOS内的系统应用进行任何修改操作
 - 刷机有风险，可能造成变砖或数据丢失，后果自负
 - HyperOS 及其相关商标、ROM 版权归小米（Xiaomi / Redmi）所有，本工具与官方无任何关联
 - 请勿将本工具用于任何商业用途
