@@ -97,7 +97,7 @@ XMAPort/
 ├── XMAport.bat          自研主脚本（菜单 + 流水线）
 ├── config.ini           配置文件
 ├── tools/               工具目录
-│   ├── *.py             自研 Python 脚本
+│   ├── *.py             Python 脚本
 │   ├── zero/            Python 模块（ext4 解析、镜像提取等）
 │   └── *.exe / *.jar    二进制工具
 └── workspace/           工作区（自动生成）
