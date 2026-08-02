@@ -1,10 +1,14 @@
 # XMAPort
 
-一键 HyperOS 跨设备移植工具（Windows Batch + Python）
+Xiaomi HyperOS 跨设备移植工具（Windows Batch + Python）
 
 ## 简介
 
-XMAPort 是一个面向 Xiaomi手机的，用于 HyperOS (Android 15/16) 的自动化 ROM 移植工具。只需提供源设备（Source）与目标设备（Target）的官方 ROM 完整包直链，即可一键完成「下载 → 解压 → payload 解包 → 镜像解包 → 分区迁移 → 重打包」全流程，输出可刷入目标机的镜像文件。
+XMAPort 是一个面向Xiaomi/REDMI手机的，用于移植 HyperOS (Android 15/16) 的自动化 ROM 移植工具。只需提供源设备（Source）与目标设备（Target）的官方 ROM 完整包直链，即可一键完成「下载 → 解压 → payload 解包 → 镜像解包 → 分区迁移 → 重打包」全流程，输出可刷入目标机的镜像文件。
+
+## 致谢
+
+>本项目使用了 Vibe Coding，参与的 AI 包括 Deepseek, GLM, Xiaomi Mimo
 
 ## 功能特性
 
@@ -14,7 +18,8 @@ XMAPort 是一个面向 Xiaomi手机的，用于 HyperOS (Android 15/16) 的自�
 - 可选打包 super.img（自动读取原机分区布局）
 - `config.ini` 直接配置 build.prop 属性补丁（充电、显示、功耗等增强项）
 - 可选注入 adb debug 属性（刷入后默认开启 USB 调试，便于首次调机）
-- product 分区打包时自动补全缺失的 SELinux file_contexts 规则
+- 自动从底包提取 vbmeta 镜像并禁用 AVB 校验（disable-verity + disable-verification），支持 vbmeta / vbmeta_system / vbmeta_vendor
+- system_ext / product 分区打包时自动补全 SELinux file_contexts、lost+found 条目与特殊权限/标签名单（fs_special.conf / fc_special.conf）
 - 彩色菜单界面，全程日志记录，支持断点续做
 
 ## 环境要求
@@ -73,10 +78,11 @@ XMAPort 是一个面向 Xiaomi手机的，用于 HyperOS (Android 15/16) 的自�
 | `ext4_packer` | make_ext4fs | ext4 打包器：make_ext4fs / mke2fs |
 | `is_skip_apex` | true | 是否跳过 system_ext apex 重打包 |
 | `enable_adb_debug` | false | 是否注入 adb debug 属性（刷入后默认开 USB 调试） |
+| `patch_vbmeta` | true | 是否禁验 vbmeta（disable-verity + disable-verification），刷第三方 ROM 建议 true |
 
 ### build.prop 补丁列表
 
-`[packing]` 段末尾可直接追加 `persist.vendor.*` / `ro.vendor.*` 属性行，打包时自动写入系统 build.prop。内置示例：夜间充电（来自 `device/xiaomi/mivendor` 公共配置）。
+`[packing]` 段末尾可直接追加 `persist.vendor.*` / `ro.vendor.*` 属性行，打包时自动写入系统 build.prop。内置示例：夜间充电、快充加速、电池健康、极致省电、高帧率、低亮度 HBM 等增强项（来自 `device/xiaomi/mivendor` 公共配置）。
 
 ## 工作流程（7 步）
 
@@ -88,13 +94,13 @@ XMAPort 是一个面向 Xiaomi手机的，用于 HyperOS (Android 15/16) 的自�
 | 4 | 解包分区镜像为文件系统目录 | simg2img / extract_img.py / extract.erofs |
 | 5 | 分区内容迁移（源 → 目标设备适配） | make_hyper.exe |
 | 6 | 重打包分区镜像 | pack_partitions.py + mkfs.erofs / make_ext4fs / mke2fs |
-| 7 | （可选）合并 super.img / 输出结果 | lpmake |
+| 7 | （可选）合并 super.img / 禁验 vbmeta / 输出结果 | lpmake / vbmeta_patch.py |
 
 ## 目录结构
 
 ```
 XMAPort/
-├── XMAport.bat          自研主脚本（菜单 + 流水线）
+├── XMAport.bat          主脚本（菜单 + 流水线）
 ├── config.ini           配置文件
 ├── tools/               工具目录
 │   ├── *.py             Python 脚本
@@ -112,14 +118,15 @@ XMAPort/
     ├── packed/          打包输出（*.img）
     └── *.log            运行日志
 ```
-本项目使用了Vibe Coding，参与的AI包括Deepseek, GLM, Xiaomi Mimo
+
 ## tools 说明
 
-**自研脚本**（Python，位于 `tools\`）：
+**Python 脚本**（位于 `tools\`）：
 
-- `pack_partitions.py` — 分区打包核心（erofs / ext4），自动补全 product 分区缺失的 file_contexts
+- `pack_partitions.py` — 分区打包核心（erofs / ext4），自动补全 system_ext / product 分区的 file_contexts、lost+found 与特殊权限/标签名单
 - `make_hyper.exe` — 定制化处理核心程序，使用C++98编写
 - `img_helper.py` — 镜像/格式辅助工具
+- `vbmeta_patch.py` — vbmeta 禁验补丁（AVB0 校验 + flags 0x03）
 
 **第三方组件**（版权归原作者，详见「第三方组件与许可」）：
 
@@ -140,16 +147,16 @@ XMAPort/
 
 以上第三方组件均未修改，随本仓库原样分发；各协议全文见项目根目录：
 
-- `LICENSE` — MIT（本工具原创部分：XMAport.bat、自研 Python 脚本、配置与文档）
+- `LICENSE` — MIT（本工具原创部分：XMAport.bat、Python 脚本、配置与文档）
 - `LICENSE-AGPL-3.0.txt` — 对应 MIO-KITCHEN-SOURCE 的 `zero\` Python 模块
 - `LICENSE-GPL-2.0.txt` — 对应 aria2c 等 GPL v2 组件
 - `LICENSE-LGPL-2.1.txt` — 对应 7-Zip
 
-
+> 注：`extract_img.py` 通过 `import` 使用了 AGPL-3.0 协议的 `zero\imgextractor.py`，依据 AGPL 的传染性约定，本仓库 Python 部分建议按 AGPL-3.0 共同发布，使用者自行评估。
 
 ## 免责声明
 
-- 本工具仅用于个人学习与测试研究，没有也不会对Xiaomi HyperOS内的系统应用进行任何修改操作
+- 本工具仅用于个人学习与测试研究，请使用备用机型操作
 - 刷机有风险，可能造成变砖或数据丢失，后果自负
 - HyperOS 及其相关商标、ROM 版权归小米（Xiaomi / Redmi）所有，本工具与官方无任何关联
 - 请勿将本工具用于任何商业用途
@@ -158,6 +165,7 @@ XMAPort/
 
 本项目为多协议分发：
 
-- 原创部分（XMAport.bat、自研 Python 脚本、配置与文档）：[MIT](LICENSE)
+- 原创部分（XMAport.bat、Python 脚本、配置与文档）：[MIT](LICENSE)
 - 第三方组件：协议归各自作者所有，全文见 [第三方组件与许可](#第三方组件与许可)
+
 
