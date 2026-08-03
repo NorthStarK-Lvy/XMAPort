@@ -152,7 +152,6 @@ XMAPort/
 - `LICENSE-GPL-2.0.txt` — 对应 aria2c 等 GPL v2 组件
 - `LICENSE-LGPL-2.1.txt` — 对应 7-Zip
 
-> 注：`extract_img.py` 通过 `import` 使用了 AGPL-3.0 协议的 `zero\imgextractor.py`，依据 AGPL 的传染性约定，本仓库 Python 部分建议按 AGPL-3.0 共同发布，使用者自行评估。
 
 ## 免责声明
 
