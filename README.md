@@ -1,6 +1,6 @@
 # XMAPort
 
-Xiaomi HyperOS 跨设备移植工具（Windows Batch + Python）
+Xiaomi HyperOS 跨设备移植工具（Python + Win32 exe）
 
 ## 简介
 
@@ -12,11 +12,11 @@ XMAPort 是一个面向Xiaomi/REDMI手机的，用于移植 HyperOS (Android 15/
 
 ## 功能特性
 
-- 全自动 7 步流水线，一键运行
+- 全自动流水线，一键运行
 - aria2c 多线程下载，支持断点续传与失败重试
 - 支持 erofs / ext4 两种文件系统，多压缩算法（lz4hc / lz4 / zstd / lzma / deflate）
 - 可选打包 super.img（自动读取原机分区布局）
-- `config.ini` 直接配置 build.prop 属性补丁（充电、显示、功耗等增强项）
+- `config.ini` 直接配置 build.prop 属性补丁
 - 可选注入 adb debug 属性（刷入后默认开启 USB 调试，便于首次调机）
 - 自动从底包提取 vbmeta 镜像并禁用 AVB 校验（disable-verity + disable-verification），支持 vbmeta / vbmeta_system / vbmeta_vendor
 - system_ext / product 分区打包时自动补全 SELinux file_contexts、lost+found 条目与特殊权限/标签名单（fs_special.conf / fc_special.conf）
@@ -79,6 +79,8 @@ XMAPort 是一个面向Xiaomi/REDMI手机的，用于移植 HyperOS (Android 15/
 | `is_skip_apex` | true | 是否跳过 system_ext apex 重打包 |
 | `enable_adb_debug` | false | 是否注入 adb debug 属性（刷入后默认开 USB 调试） |
 | `patch_vbmeta` | true | 是否禁验 vbmeta（disable-verity + disable-verification），刷第三方 ROM 建议 true |
+| `utc_stamp` | 空 | 打包用固定 UTC 时间戳（整数，留空 = 当前时间，便于可复现打包） |
+| `erofs_old_kernel` | false | erofs 打包附加 `-E legacy-compress`（兼容旧内核） |
 
 ### build.prop 补丁列表
 
@@ -152,10 +154,11 @@ XMAPort/
 - `LICENSE-GPL-2.0.txt` — 对应 aria2c 等 GPL v2 组件
 - `LICENSE-LGPL-2.1.txt` — 对应 7-Zip
 
+> 注：`extract_img.py` 通过 `import` 使用了 AGPL-3.0 协议的 `zero\imgextractor.py`，依据 AGPL 的传染性约定，本仓库 Python 部分建议按 AGPL-3.0 共同发布，使用者自行评估。
 
 ## 免责声明
 
-- 本工具仅用于个人学习与测试研究，没有也不会对 Xiaomi HyperOS 内的系统应用进行任何修改操作
+- 本工具仅用于个人学习与测试研究，请使用备用机型操作
 - 刷机有风险，可能造成变砖或数据丢失，后果自负
 - HyperOS 及其相关商标、ROM 版权归小米（Xiaomi / Redmi）所有，本工具与官方无任何关联
 - 请勿将本工具用于任何商业用途

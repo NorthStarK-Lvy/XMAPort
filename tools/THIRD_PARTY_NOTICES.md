@@ -3,7 +3,7 @@
 本文件列出 XMAPort 项目中引用的全部第三方组件、其开源协议、版权声明与来源。
 这些组件均未做任何修改，以原样随项目分发。
 
-项目原创部分（XMAport.bat、自研 Python 脚本、config.ini、README 等）采用 MIT 协议，见根目录 `LICENSE`。
+项目原创部分（XMAport.bat、Python 脚本、config.ini、README 等）采用 MIT 协议，见根目录 `LICENSE`。
 
 ---
 

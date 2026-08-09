@@ -16,6 +16,10 @@
 # - 原始 fs_config 中不存在的条目会被剔除
 # - 文件系统目录中缺少 fs_config 条目的文件/目录会被自动补全权限
 # - 补全规则：DEFAULT_PERMS + 同目录同后缀多数决 + symlink/bin/.sh 特殊规则
+# - 特殊可执行名单：config/fs_special.conf（bin/su 等强制 0 2000 0755）
+# - file_contexts 自动补全：product + system_ext（缺规则即补，label 继承父级）
+# - 特殊 label 名单：config/fc_special.conf（路径 → 指定 label，优先于继承）
+# - 名单文件不存在时自动生成预填模板，可手动增删
 # - 补全前后内容写入 work/config/{name}_fs_config.log
 
 # 用法: python pack_partitions.py <format> <compression> <source_dir> <output_dir> [ext4_packer]
@@ -24,6 +28,10 @@
 # source_dir  = work/{name}（分区目录，如 source_filesystem/system）
 # output_dir  = 输出镜像目录（如 workspace/packed）
 # ext4_packer = make_ext4fs（默认）| mke2fs
+#
+# 可选环境变量：
+# XMAPORT_UTC_STAMP    = 固定 UTC 时间戳（整数）。留空/未设 → 使用当前时间
+# XMAPORT_EROFS_LEGACY = true 时 erofs 打包附加 -E legacy-compress（兼容旧内核）
 #
 import os
 import re
@@ -47,12 +55,27 @@ DEFAULT_PERMS = {
 FALLBACK_PERM = (0, 0, "0755", "0644")
 
 
-def find_tool(name):
+def find_tool(name, legacy=False):
+    # legacy=True 时优先使用 erofs-utils-cygwin 内的旧版工具（erofs-utils 1.4）
+    if legacy:
+        p = os.path.join(SCRIPT_DIR, 'erofs-utils-cygwin', name + '.exe')
+        if os.path.isfile(p):
+            return p
     for cand in (name + '.exe', name):
         p = os.path.join(SCRIPT_DIR, cand)
         if os.path.isfile(p):
             return p
     return None
+
+
+def resolve_utc(utc):
+    # 时间戳优先级：显式参数 > 环境变量 XMAPORT_UTC_STAMP > 当前时间
+    if utc is not None:
+        return int(utc)
+    env_utc = os.environ.get("XMAPORT_UTC_STAMP", "").strip()
+    if env_utc.isdigit():
+        return int(env_utc)
+    return int(time.time())
 
 
 def detect_content_dir(work, name):
@@ -153,6 +176,60 @@ def build_peer_map(cfg):
 
 
 # ============================================================
+#  名单文件机制（fs_special.conf / fc_special.conf）
+#  - 文件不存在时自动生成预填模板（含常见项 + 格式说明），方便手动修改
+#  - 文件存在时以文件内容为准（可增删内置常见项）
+# ============================================================
+
+# fs_config 特殊可执行名单：路径包含以下片段即强制 0 2000 0755
+_FS_SPECIAL_DEFAULT = [
+    "bin/su",
+    "xbin/su",
+    "bin/rw-system.sh",
+    "bin/getSPL",
+    "bin/install-recovery",
+    "bin/daemon",
+    "ext/.su",
+    "disable_selinux.sh",
+]
+
+# file_contexts 特殊 label 名单：路径命中（或其子路径）时优先使用该 label
+_FC_SPECIAL_DEFAULT = [
+    "/vendor/bin/hw/android.hardware.wifi@1.0                u:object_r:hal_wifi_default_exec:s0",
+    "/vendor/bin/hw/android.hardware.wifi@1.0-service        u:object_r:hal_wifi_default_exec:s0",
+    "/vendor/bin/hw/android.hardware.displayfeature@1.0-service   u:object_r:hal_displayfeature_default_exec:s0",
+    "/system/bin/su                                          u:object_r:su_exec:s0",
+    "/system/xbin/su                                         u:object_r:su_exec:s0",
+]
+
+
+def load_special_list(config_dir, filename, defaults, comment_lines=()):
+    # 读取名单文件；不存在时生成预填模板。返回有效条目列表。
+    path = os.path.join(config_dir, filename)
+    if not os.path.isfile(path):
+        lines = ['# ' + c for c in comment_lines]
+        lines.append('')
+        lines.extend(defaults)
+        try:
+            with open(path, 'w', encoding='utf-8') as f:
+                f.write('\n'.join(lines) + '\n')
+            print(f"    [*] 已生成名单文件: {path}")
+        except OSError:
+            pass
+    entries = []
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            for line in f:
+                s = line.strip()
+                if not s or s.startswith('#'):
+                    continue
+                entries.append(s)
+    except OSError:
+        return list(defaults)
+    return entries
+
+
+# ============================================================
 #  核心：fs_config 自动补全 + 前后日志
 # ============================================================
 def prepare_fs_config(name, work, content_dir):
@@ -170,6 +247,14 @@ def prepare_fs_config(name, work, content_dir):
         print(f"    [ERROR] fs_config 不存在: {orig_path}")
         print(f"    [ERROR] 不允许在无 fs_config 的情况下打包（全默认权限）")
         return None
+
+    special_exec = load_special_list(
+        config_dir, 'fs_special.conf', _FS_SPECIAL_DEFAULT,
+        comment_lines=(
+            '特殊可执行名单：路径包含以下片段即强制 0 2000 0755',
+            '每行一条，支持 # 注释；修改后重新打包即生效。',
+            '常见项已预填，可按需增删：',
+        ))
 
     uid, gid, dir_mode, file_mode = DEFAULT_PERMS.get(name, FALLBACK_PERM)
 
@@ -231,15 +316,18 @@ def prepare_fs_config(name, work, content_dir):
                     sym_target = read_symlink_target(fpath)
                     rel_parts = rel.split('/')
                     is_bin = 'bin' in rel_parts or 'xbin' in rel_parts
+                    is_special = any(s in rel for s in special_exec)
                     if sym_target:
                         fm = file_mode
                         fgid = gid
-                        if is_bin:
+                        if is_bin or is_special:
                             fgid = '2000'
                             fm = '0755'
                         elif rel.endswith('.sh'):
                             fm = '0750'
                         cfg[rel] = f"{uid} {fgid} {fm} {sym_target}"
+                    elif is_special:
+                        cfg[rel] = f"{uid} 2000 0755"
                     elif is_bin:
                         cfg[rel] = f"{uid} 2000 0755"
                     elif rel.endswith('.sh'):
@@ -259,7 +347,9 @@ def prepare_fs_config(name, work, content_dir):
                         cfg[rel] = f"{p[0]} {p[1]} {p[2]}"
                         assigned = True
                 if not assigned:
-                    cfg[rel] = f"{uid} {gid} {dir_mode}"
+                    rel_parts = rel.split('/')
+                    dgid = '2000' if ('bin' in rel_parts or 'xbin' in rel_parts) else gid
+                    cfg[rel] = f"{uid} {dgid} {dir_mode}"
                 added_log.append(f"  {rel} -> {cfg[rel]}")
                 added += 1
 
@@ -267,10 +357,13 @@ def prepare_fs_config(name, work, content_dir):
     if peer_map:
         print(f"    [*] system_ext 同目录同后缀多数决权限继承已启用")
 
-    # --- Step 4: 确保根目录 ---
+    # --- Step 4: 确保根目录与 lost+found ---
     if "/" not in cfg:
         cfg["/"] = f"{uid} {gid} {dir_mode}"
         print(f"    [*] 补充根 \"/\" 条目")
+    if "lost+found" not in cfg:
+        cfg["lost+found"] = "0 0 0755"
+        print(f"    [*] 补充 lost+found 条目")
 
     # --- Step 5: 写出 fixed fs_config（带分区前缀）---
     prefix = name + "/"
@@ -316,13 +409,22 @@ def prepare_fs_config(name, work, content_dir):
 
 
 # ============================================================
-#  file_contexts 自动补全（仅 product 分区启用）
+#  file_contexts 自动补全（product / system_ext 启用）
 #  - 只追加缺失的规则，不改动原始规则行
 #  - 判定"缺失"：文件/目录没有任何正则规则或精确路径规则匹配
 #    （纯前缀目录规则不视为该路径自身的规则）
-#  - 新规则 label 继承最近父级前缀规则的 label，无则用 product 默认
+#  - 新规则 label 优先级：特殊名单(fc_special.conf) > 父级前缀规则继承 > 分区默认
 # ============================================================
 _FC_META_RE = re.compile(r'[.^$*+?{}()\\|\[\]]')
+
+# 启用 file_contexts 补全的分区
+_FC_ALLOW_PARTS = ("product", "system_ext")
+
+# 分区默认 label（特殊名单与父级继承均未命中时使用）
+_FC_DEFAULT_LABEL = {
+    "product":    "u:object_r:system_file:s0",
+    "system_ext": "u:object_r:system_ext_file:s0",
+}
 
 
 def _fc_has_regex(pattern):
@@ -342,23 +444,8 @@ def _fc_match(pattern, path):
     return path == base or path.startswith(base + '/')
 
 
-def _fc_parent_label(rules, path):
-    # 从无元字符前缀规则中找最近父级 label；无则返回 None。
-    best = None
-    for pattern, label in rules:
-        if _fc_has_regex(pattern):
-            continue
-        base = pattern.rstrip('/')
-        if base == '/' or base == '':
-            continue
-        if path.startswith(base + '/') or path == base:
-            if best is None or len(base) > best[0]:
-                best = (len(base), label)
-    return best[1] if best else None
-
-
 def prepare_file_contexts(name, work, content_dir):
-    # 为新增文件自动补全 file_contexts 规则（仅 product）。
+    # 为新增文件自动补全 file_contexts 规则（product / system_ext）。
 
     # 读取原始 {name}_file_contexts，保留全部原始规则行，
     # 遍历文件系统，为没有精确规则匹配的文件/目录生成新规则
@@ -373,32 +460,75 @@ def prepare_file_contexts(name, work, content_dir):
         print(f"    [ERROR] file_contexts 不存在: {orig_path}")
         return None
 
+    special_labels = load_special_list(
+        config_dir, 'fc_special.conf', _FC_SPECIAL_DEFAULT,
+        comment_lines=(
+            '特殊 label 名单：每行一条 "路径 label"，支持 # 注释。',
+            '路径命中（或其子路径）时优先使用该 label；',
+            '常见项已预填（su / wifi / displayfeature 等），可按需增删：',
+        ))
+    special_list = []
+    for s in special_labels:
+        parts = s.split(None, 1)
+        if len(parts) == 2:
+            special_list.append((parts[0].rstrip('/'), parts[1]))
+
     with open(orig_path, 'r', encoding='utf-8') as f:
         orig_lines = f.read().splitlines()
 
-    rules = []  # (pattern, label)
+    raw_rules = []  # (pattern, label)
     for line in orig_lines:
         s = line.strip()
         if not s or s.startswith('#'):
             continue
         parts = s.split(None, 1)
         if len(parts) == 2:
-            rules.append((parts[0], parts[1]))
+            raw_rules.append((parts[0], parts[1]))
 
-    def has_exact_rule(path):
-        for pattern, _ in rules:
-            if _fc_has_regex(pattern):
-                try:
-                    if re.fullmatch(pattern, path):
-                        return True
-                except re.error:
-                    continue
-            elif path == pattern:
+    # 按语义拆分规则，避免全量遍历导致 O(n²)（system_ext 文件量大时卡死）：
+    # - exact_rules  : 无元字符 pattern + 新增条目，O(1) set 查找
+    # - regex_rules  : 预编译正则规则，数量固定，不随新增条目增长
+    # - prefix_rules : 无元字符前缀规则（仅用于父级 label 继承）
+    exact_rules = set()
+    regex_rules = []
+    prefix_rules = []
+    for pattern, label in raw_rules:
+        if _fc_has_regex(pattern):
+            try:
+                regex_rules.append(re.compile(pattern))
+            except re.error:
+                pass
+        else:
+            exact_rules.add(pattern)
+            base = pattern.rstrip('/')
+            if base and base != '/':
+                prefix_rules.append((base, label))
+
+    def is_covered(path):
+        # 路径是否已被规则覆盖（精确 O(1) + 数量固定的预编译正则）
+        if path in exact_rules:
+            return True
+        for cre in regex_rules:
+            if cre.fullmatch(path):
                 return True
         return False
 
-    fallback_label = 'u:object_r:system_file:s0'
+    def pick_label(path):
+        # label 优先级：特殊名单 > 父级前缀继承 > 分区默认
+        for spath, slabel in special_list:
+            if path == spath or path.startswith(spath + '/'):
+                return slabel
+        best = None
+        for base, label in prefix_rules:
+            if path.startswith(base + '/') or path == base:
+                if best is None or len(base) > best[0]:
+                    best = (len(base), label)
+        if best is not None:
+            return best[1]
+        return _FC_DEFAULT_LABEL.get(name, 'u:object_r:system_file:s0')
+
     added = []
+    scanned = 0
     for root, dirs, files in os.walk(content_dir):
         entries = [os.path.join(root, d) for d in dirs] + \
                   [os.path.join(root, f) for f in files]
@@ -407,14 +537,21 @@ def prepare_file_contexts(name, work, content_dir):
             if rel == '':
                 continue
             path = '/' + name + '/' + rel
-            if has_exact_rule(path):
+            scanned += 1
+            if scanned % 20000 == 0:
+                print(f"    [*] file_contexts 匹配中... 已扫描 {scanned} 项，"
+                      f"已补 {len(added)} 条（{name}）")
+            if is_covered(path):
                 continue
-            label = _fc_parent_label(rules, path)
-            if label is None:
-                label = fallback_label
-            new_pattern = re.escape(path)
-            rules.append((new_pattern, label))
-            added.append(f"{new_pattern} {label}")
+            label = pick_label(path)
+            exact_rules.add(path)   # 去重，且供后续条目 O(1) 精确命中
+            added.append(f"{re.escape(path)} {label}")
+
+    lf_path = '/' + name + '/lost+found'
+    if not is_covered(lf_path):
+        label = pick_label(lf_path)
+        exact_rules.add(lf_path)
+        added.append(f"{re.escape(lf_path)} {label}")
 
     if not added:
         print(f"    [*] file_contexts 无需补全（{name}）")
@@ -424,9 +561,13 @@ def prepare_file_contexts(name, work, content_dir):
     with open(fixed_path, 'w', encoding='utf-8') as f:
         f.write('\n'.join(out_lines) + '\n')
 
-    print(f"    [*] file_contexts 补全 {len(added)} 条缺失规则（仅 {name}）")
-    for a in added:
-        print(f"        + {a}")
+    print(f"    [*] file_contexts 补全 {len(added)} 条缺失规则（{name}）")
+    if len(added) <= 200:
+        # 条目较少时逐条展示；海量补全时只打摘要（避免控制台刷屏拖慢）
+        for a in added:
+            print(f"        + {a}")
+    else:
+        print(f"        （条目过多，省略明细，详见补全后文件）")
     print(f"    [*] 补全后 file_contexts: {fixed_path}")
     return fixed_path
 
@@ -454,12 +595,14 @@ def check_configs(name, work):
 #  erofs 打包
 # ============================================================
 def mkerofs(name, work, work_output, fmt_alg, level, utc=None):
-    if utc is None:
-        utc = int(time.time())
-    mkfs = find_tool('mkfs.erofs')
+    utc = resolve_utc(utc)
+    use_legacy = os.environ.get("XMAPORT_EROFS_LEGACY_EXE", "").strip().lower() == "true"
+    mkfs = find_tool('mkfs.erofs', legacy=use_legacy)
     if not mkfs:
         print("    [X] mkfs.erofs 未找到")
         return 1
+    if use_legacy:
+        print(f"    [*] IF_LEGACY_EROFS=true: 使用旧版 mkfs.erofs (erofs-utils 1.4)")
 
     content_dir = detect_content_dir(work, name)
     fc = check_configs(name, work)
@@ -468,16 +611,20 @@ def mkerofs(name, work, work_output, fmt_alg, level, utc=None):
     fixed_fs = prepare_fs_config(name, work, content_dir)
     if fixed_fs is None:
         return 1
-    if name == "product":
+    if name in _FC_ALLOW_PARTS:
         fixed_fc = prepare_file_contexts(name, work, content_dir)
         if fixed_fc is None:
             return 1
         fc = fixed_fc
 
     extra = f'{fmt_alg},{level}' if fmt_alg != 'lz4' else fmt_alg
+    legacy = []
+    if os.environ.get("XMAPORT_EROFS_LEGACY", "").strip().lower() == "true":
+        # 兼容旧内核的压缩格式（参照 TIK5 的 erofs_old_kernel 开关）
+        legacy = ['-E', 'legacy-compress']
     src = content_dir + os.sep   # 带尾斜杠（约定）
     out_img = os.path.join(work_output, f'{name}.img')
-    cmd = [mkfs, f'-z{extra}', '-T', f'{utc}',
+    cmd = [mkfs, *legacy, f'-z{extra}', '-T', f'{utc}',
            f'--mount-point=/{name}',
            f'--product-out={work}',
            f'--fs-config-file={fixed_fs}',
@@ -490,8 +637,7 @@ def mkerofs(name, work, work_output, fmt_alg, level, utc=None):
 #  ext4 打包：make_ext4fs
 # ============================================================
 def make_ext4fs(name, work, work_output, sparse=False, size=0, utc=None):
-    if utc is None:
-        utc = int(time.time())
+    utc = resolve_utc(utc)
     exe = find_tool('make_ext4fs')
     if not exe:
         print("    [X] make_ext4fs 未找到")
@@ -504,7 +650,7 @@ def make_ext4fs(name, work, work_output, sparse=False, size=0, utc=None):
     fixed_fs = prepare_fs_config(name, work, content_dir)
     if fixed_fs is None:
         return 1
-    if name == "product":
+    if name in _FC_ALLOW_PARTS:
         fixed_fc = prepare_file_contexts(name, work, content_dir)
         if fixed_fc is None:
             return 1
@@ -527,8 +673,7 @@ def make_ext4fs(name, work, work_output, sparse=False, size=0, utc=None):
 #  ext4 打包：mke2fs + e2fsdroid
 # ============================================================
 def mke2fs(name, work, work_output, sparse=False, size=0, utc=None):
-    if utc is None:
-        utc = int(time.time())
+    utc = resolve_utc(utc)
     mke2fs_exe = find_tool('mke2fs')
     e2fsdroid_exe = find_tool('e2fsdroid')
     if not mke2fs_exe or not e2fsdroid_exe:
@@ -542,7 +687,7 @@ def mke2fs(name, work, work_output, sparse=False, size=0, utc=None):
     fixed_fs = prepare_fs_config(name, work, content_dir)
     if fixed_fs is None:
         return 1
-    if name == "product":
+    if name in _FC_ALLOW_PARTS:
         fixed_fc = prepare_file_contexts(name, work, content_dir)
         if fixed_fc is None:
             return 1
