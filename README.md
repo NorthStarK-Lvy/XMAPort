@@ -86,18 +86,21 @@ XMAPort 是一个面向Xiaomi/REDMI手机的，用于移植 HyperOS (Android 15/
 
 `[packing]` 段末尾可直接追加 `persist.vendor.*` / `ro.vendor.*` 属性行，打包时自动写入系统 build.prop。内置示例：夜间充电、快充加速、电池健康、极致省电、高帧率、低亮度 HBM 等增强项（来自 `device/xiaomi/mivendor` 公共配置）。
 
-## 工作流程（7 步）
+## 适用机型
 
-| 步骤 | 内容 | 工具 |
-|---|---|---|
-| 1 | 下载源/目标 ROM 完整包 | aria2c |
-| 2 | 解压 ROM 压缩包 | 7z |
-| 3 | 提取 payload.bin 中各分区镜像 | payload-dumper-go |
-| 4 | 解包分区镜像为文件系统目录 | simg2img / extract_img.py / extract.erofs |
-| 5 | 分区内容迁移（源 → 目标设备适配） | make_hyper.exe |
-| 6 | 重打包分区镜像 | pack_partitions.py + mkfs.erofs / make_ext4fs / mke2fs |
-| 7 | （可选）合并 super.img / 禁验 vbmeta / 输出结果 | lpmake / vbmeta_patch.py |
+已经经过测试的包括
+REDMI Note12R 移植 REDMI K70(Android16)
+REDMI Note12R 移植 REDMI Note12Turbo(Android15)
+REDMI Note12R 移植 REDMI Note17(Android16)
+REDMI Note12R 移植 Xiaomi 12(Android13)
 
+理论支持的包括
+Xiaomi 11/12/13/14/15/17全系列
+REDMI K50/60/70/80/90/100全系列
+Note 12/13/14/15/17全系列
+REDMI 12/13/14/15/17全系列
+
+>不建议旗舰机型(当前为Xiaomi 17系列)使用本工具
 
 ## 目录结构
 
