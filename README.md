@@ -33,11 +33,11 @@ XMAPort 是一个面向Xiaomi/REDMI手机的，用于移植 HyperOS (Android 15/
 
 ## 快速开始
 
-1. 保持目录结构完整（`XMAport.bat`、`config.ini`、`tools\` 缺一不可）
+1. 确保电脑环境内有python
 2. 编辑 `config.ini`：
    - `[source] url =` 源设备 ROM 完整包直链（被移植的系统来源）
    - `[target] url =` 目标设备 ROM 完整包直链（要刷入的设备）
-3. 双击运行 `XMAport.bat`
+3. 双击运行 `XMAport.py`
 4. 主菜单选择 `[1] Done Port HyperOS`
 5. 首次运行需输入目标设备代号（如 `sky`、`sheng`、`fuxi`）
 6. 确认参数无误后开始，最终镜像输出到 `workspace\packed\`
@@ -98,8 +98,6 @@ XMAPort 是一个面向Xiaomi/REDMI手机的，用于移植 HyperOS (Android 15/
 | 6 | 重打包分区镜像 | pack_partitions.py + mkfs.erofs / make_ext4fs / mke2fs |
 | 7 | （可选）合并 super.img / 禁验 vbmeta / 输出结果 | lpmake / vbmeta_patch.py |
 
-##使用方法
-在电脑环境变量内配置好python，然后双击XMAPort.py开始
 
 ## 目录结构
 
