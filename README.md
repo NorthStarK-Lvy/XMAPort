@@ -89,23 +89,22 @@ XMAPort 是一个面向Xiaomi/REDMI手机的，用于移植 HyperOS (Android 15/
 ## 适用机型
 
 已经经过测试的包括
-REDMI Note12R 移植 REDMI K70(Android16)
+-REDMI Note12R 移植 REDMI K70(Android16)
 
-REDMI Note12R 移植 REDMI Note12Turbo(Android15)
+-REDMI Note12R 移植 REDMI Note12Turbo(Android15)
 
-REDMI Note12R 移植 REDMI Note17(Android16)
+-REDMI Note12R 移植 REDMI Note17(Android16)
 
-REDMI Note12R 移植 Xiaomi 12(Android13)
-
+-REDMI Note12R 移植 Xiaomi 12(Android13)
 
 理论支持的包括
-Xiaomi 11/12/13/14/15/17全系列
+-Xiaomi 11/12/13/14/15/17全系列
 
-REDMI K50/60/70/80/90/100全系列
+-REDMI K50/60/70/80/90/100全系列
 
-Note 12/13/14/15/17全系列
+-Note 12/13/14/15/17全系列
 
-REDMI 12/13/14/15/17全系列
+-REDMI 12/13/14/15/17全系列
 
 
 >不建议旗舰机型(当前为Xiaomi 17系列)使用本工具
