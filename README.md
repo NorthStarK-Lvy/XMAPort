@@ -178,7 +178,7 @@ XMAPort/
 
 本项目为多协议分发：
 
-- 原创部分（XMAport.bat、Python 脚本、配置与文档）：[MIT](LICENSE)
+- 原创部分（XMAport.py、Python 脚本、配置与文档）：[MIT](LICENSE)
 - 第三方组件：协议归各自作者所有，全文见 [第三方组件与许可](#第三方组件与许可)
 
 
