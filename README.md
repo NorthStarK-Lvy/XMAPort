@@ -98,6 +98,9 @@ XMAPort 是一个面向Xiaomi/REDMI手机的，用于移植 HyperOS (Android 15/
 | 6 | 重打包分区镜像 | pack_partitions.py + mkfs.erofs / make_ext4fs / mke2fs |
 | 7 | （可选）合并 super.img / 禁验 vbmeta / 输出结果 | lpmake / vbmeta_patch.py |
 
+##使用方法
+在电脑环境变量内配置好python，然后双击XMAPort.py开始
+
 ## 目录结构
 
 ```
