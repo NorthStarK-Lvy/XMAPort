@@ -3,7 +3,7 @@
 本文件列出 XMAPort 项目中引用的全部第三方组件、其开源协议、版权声明与来源。
 这些组件均未做任何修改，以原样随项目分发。
 
-项目原创部分（XMAport.bat、Python 脚本、config.ini、README 等）采用 MIT 协议，见根目录 `LICENSE`。
+项目原创部分（XMAport.py、Python 脚本、config.ini、README 等）采用 MIT 协议，见根目录 `LICENSE`。
 
 ---
 
@@ -48,7 +48,7 @@
   - `tools\zero\ext4.py` — ext4 文件系统解析库
   - `tools\zero\imgextractor.py` — 分区镜像提取器
   - `tools\zero\posix.py` — Windows 下 symlink 兼容支持
-  - `tools\zero\img_init.py` — sparse 镜像初始化（未带许可头，保守按同源协议处理）
+  - `tools\zero\img_init.py` — sparse 镜像初始化
 - **用途**: 镜像格式转换与分区内容提取
 - **协议**: 文件头声明为 GNU Affero General Public License v3.0 (AGPL-3.0)
 - **来源**: https://github.com/ColdWindScholar/MIO-KITCHEN-SOURCE
