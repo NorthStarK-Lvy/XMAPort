@@ -80,10 +80,21 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          $tag = "XMAPort-$(Get-Date -Format yyyyMMdd)-Beta"
-          if (gh release view $tag 2>$null) {
-            gh release upload $tag XMAPort-win64.zip --clobber
-            gh release edit $tag --latest
+          $date = Get-Date -Format yyyyMMdd
+          $base = "XMAPort-$date-Beta"
+
+          # 统计今天已有的 release 数量，决定这是今天的第几个版本
+          $todayTags = gh release list --limit 100 --json tagName --jq '.[].tagName' |
+            Where-Object { $_ -like "$base*" }
+          $count = @($todayTags).Count + 1
+
+          if ($count -eq 1) {
+            $tag = $base
           } else {
-            gh release create $tag XMAPort-win64.zip --title "XMAPort $(Get-Date -Format yyyyMMdd) Beta" --notes "XMAPort $(Get-Date -Format yyyyMMdd) Beta On Windows`n`n用法：解压后运行 XMAPort.py（或使用命令行参数 --auto/--device/--source/--target）。" --latest
+            $tag = "$base-$count"
           }
+
+          $notes = "XMAPort $date Beta On Windows（今日第 $count 个版本）" +
+            "`n`n用法：解压后运行 XMAPort.py（或使用命令行参数 --auto/--device/--source/--target）。"
+
+          gh release create $tag XMAPort-win64.zip --title "XMAPort $date Beta #$count" --notes $notes --latest
