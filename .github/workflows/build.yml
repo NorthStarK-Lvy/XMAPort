@@ -1,4 +1,4 @@
-name: Build XMAPort Windows EXE
+name: Build XMAPort ROM
 
 on:
   push:
