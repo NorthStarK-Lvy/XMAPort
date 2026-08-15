@@ -24,12 +24,7 @@ on:
         description: '目标 ROM 直链（留空用 config.ini）'
         required: false
         type: string
-      yes:
-        description: '跳过确认 (true/false)'
-        required: false
-        default: 'true'
-        type: choice
-        options: ['true', 'false']
+     
 
 jobs:
   porting:
