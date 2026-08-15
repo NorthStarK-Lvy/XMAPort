@@ -115,7 +115,7 @@ XMAPort 是一个面向Xiaomi/REDMI手机的，用于移植 HyperOS (Android 15/
 
 ```
 XMAPort/
-├── XMAport.bat          主脚本（菜单 + 流水线）
+├── XMAport.pu           主脚本（菜单 + 流水线）
 ├── config.ini           配置文件
 ├── tools/               工具目录
 │   ├── *.py             Python 脚本
@@ -139,7 +139,7 @@ XMAPort/
 **Python 脚本**（位于 `tools\`）：
 
 - `pack_partitions.py` — 分区打包核心（erofs / ext4），自动补全 system_ext / product 分区的 file_contexts、lost+found 与特殊权限/标签名单
-- `make_hyper.exe` — 定制化处理核心程序，使用C++98编写
+- `make_hyper.pu` — 定制化处理核心程序
 - `img_helper.py` — 镜像/格式辅助工具
 - `vbmeta_patch.py` — vbmeta 禁验补丁（AVB0 校验 + flags 0x03）
 
