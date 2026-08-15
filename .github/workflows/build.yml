@@ -24,7 +24,6 @@ on:
         description: '目标 ROM 直链（留空用 config.ini）'
         required: false
         type: string
-     
 
 jobs:
   porting:
@@ -33,12 +32,11 @@ jobs:
     timeout-minutes: 120
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
-          cache: 'pip'
 
       - name: Run XMAPort
         shell: pwsh
@@ -46,12 +44,11 @@ jobs:
           $args = @("--auto", "--device", "${{ inputs.device }}")
           if ("${{ inputs.source }}") { $args += "--source"; $args += "${{ inputs.source }}" }
           if ("${{ inputs.target }}") { $args += "--target"; $args += "${{ inputs.target }}" }
-          if ("${{ inputs.yes }}" -eq "true") { $args += "-y" }
           python XMAPort.py @args
 
       - name: Upload porting output
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: XMAPort-output-${{ inputs.device }}
           path: |
@@ -65,12 +62,11 @@ jobs:
     runs-on: windows-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
-          cache: 'pip'
 
       - name: Install PyInstaller
         run: pip install pyinstaller
@@ -88,7 +84,7 @@ jobs:
           Compress-Archive -Path release\* -DestinationPath XMAPort-win64.zip
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: XMAPort-win64
           path: XMAPort-win64.zip
