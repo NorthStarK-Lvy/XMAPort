@@ -87,6 +87,13 @@ jobs:
 
       - name: Upload to Release
         shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           $tag = "v${{ github.run_number }}"
-          gh release create $tag XMAPort-win64.zip --title "XMAPort $tag" --notes "自动构建的 Windows 版本。`n`n用法：解压后运行 XMAPort.exe（或使用命令行参数 --auto/--device/--source/--target）。" --latest
+          if (gh release view $tag 2>$null) {
+            gh release upload $tag XMAPort-win64.zip --clobber
+            gh release edit $tag --latest
+          } else {
+            gh release create $tag XMAPort-win64.zip --title "XMAPort $tag" --notes "自动构建的 Windows 版本。`n`n用法：解压后运行 XMAPort.exe（或使用命令行参数 --auto/--device/--source/--target）。" --latest
+          }
