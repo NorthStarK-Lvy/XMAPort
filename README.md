@@ -34,6 +34,11 @@ XMAPort 是一个面向Xiaomi/REDMI手机的，用于移植 HyperOS (Android 15/
 5. 首次运行需输入目标设备代号（如 `sky`、`sheng`、`fuxi`）
 6. 确认参数无误后开始，最终镜像输出到 `workspace\packed\`
 
+>如果您想下载工具到本地跑包的同时偷个懒的话，您现在可以使用python XMAPort.py --auto --device sheng来一键流水线完成。
+>同时，如果您懒得编辑config.ini，也可以使用python XMAPort.py --auto --device sheng \
+  --source https://.../source_rom.zip \
+  --target https://.../target_rom.zip
+
 ## 适用机型
 
 ### 已经经过测试的包括
@@ -44,6 +49,8 @@ XMAPort 是一个面向Xiaomi/REDMI手机的，用于移植 HyperOS (Android 15/
 - REDMI Note12R 移植 REDMI Note17(Android16)
 
 - REDMI Note12R 移植 Xiaomi 12(Android13)
+
+- REDMI Note12R 移植 Xiaomi 17 Ultra(Android17)
 
 ### 理论支持的包括
 - Xiaomi 11/12/13/14/15/17全系列
