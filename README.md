@@ -12,15 +12,7 @@ XMAPort 是一个面向Xiaomi/REDMI手机的，用于移植 HyperOS (Android 15/
 
 ## 功能特性
 
-- 全自动流水线，一键运行
-- aria2c 多线程下载，支持断点续传与失败重试
-- 支持 erofs / ext4 两种文件系统，多压缩算法（lz4hc / lz4 / zstd / lzma / deflate）
-- 可选打包 super.img（自动读取原机分区布局）
-- `config.ini` 直接配置 build.prop 属性补丁
-- 可选注入 adb debug 属性（刷入后默认开启 USB 调试，便于首次调机）
-- 自动从底包提取 vbmeta 镜像并禁用 AVB 校验（disable-verity + disable-verification），支持 vbmeta / vbmeta_system / vbmeta_vendor
-- system_ext / product 分区打包时自动补全 SELinux file_contexts、lost+found 条目与特殊权限/标签名单（fs_special.conf / fc_special.conf）
-- 彩色菜单界面，全程日志记录，支持断点续做
+正在测试Github Actions
 
 ## 环境要求
 
