@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 
 
+import argparse
 import os
 import platform
 import shutil
@@ -28,14 +29,27 @@ BD = "\x1b[1m"
 # 调试模式：1 时打印 INFO 日志，0 时隐藏（原 bat 的 DEBUG_MODE）
 DEBUG_MODE = "1"
 
+# ---------------- CLI / auto 模式全局标记 ----------------
+AUTO_MODE = False       # --auto 时为 True
+CLI_DEVICE = ""         # --device
+CLI_SOURCE = ""         # --source
+CLI_TARGET = ""         # --target
+CLI_YES = False         # -y / --yes
+
 
 # ---------------- 控制台准备 ----------------
 def init_console():
-    # Windows 上先置空 TITLE，再启用 ANSI 虚拟终端（模拟原 bat 的 reg add）
+    if AUTO_MODE:
+        # auto 模式：跳过 title 命令，仅做 UTF-8 配置
+        try:
+            sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+            sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+        return
+    # 交互模式：完整行为
     os.system("")
-    # 设置控制台窗口标题
-    os.system("title XMAPort 260811.R3")
-    # 防止非 UTF-8 终端下中文输出崩溃
+    os.system("title XMAPort 260815.Beta")
     try:
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
         sys.stderr.reconfigure(encoding="utf-8", errors="replace")
@@ -44,7 +58,8 @@ def init_console():
 
 
 # ---------------- 路径（脚本所在目录为根） ----------------
-ROOT = Path(__file__).resolve().parent
+# frozen (PyInstaller --onefile) 时 sys.executable 指向 exe 所在目录
+ROOT = Path(sys.executable).resolve().parent if getattr(sys, 'frozen', False) else Path(__file__).resolve().parent
 TOOLS = ROOT / "tools"
 WORKSPACE = ROOT / "workspace"
 
@@ -116,6 +131,9 @@ def prompt(text):
 
 
 def pause():
+    # auto 模式下跳过等待
+    if AUTO_MODE:
+        return
     # 对应原 bat 的 pause：等待任意键
     if sys.stdin and sys.stdin.isatty():
         sys.stdout.write("Please press any key to continue . . . ")
@@ -159,7 +177,7 @@ def check_tool(name, src):
     print("  {}{}  {}  {}{}{}".format(W, name, tag, D, src, N))
 
 
-def tool_status():
+def tool_status(pause_after=True):
     os.system("cls" if os.name == "nt" else "clear")
     print()
     print("  {}+----------------------------------------------------------+{}".format(C, N))
@@ -179,7 +197,8 @@ def tool_status():
     check_tool("img_helper.py", "SuccessSourcePythonSuccess")
     check_tool("pack_partitions.py", "SuccessSourcePythonDone")
     print("  " + D + "----------------------------------------------------------" + N)
-    pause()
+    if pause_after:
+        pause()
 
 
 # ---------------- [C] 开源致谢 ----------------
@@ -224,9 +243,10 @@ def clean_workspace():
     ]:
         print("  {}    - {}{}".format(D, path, N))
     print()
-    answer = prompt("  {}Are you sure? (Y/N): {}".format(R, N))
-    if answer.strip().lower() != "y":
-        return
+    if not CLI_YES:
+        answer = prompt("  {}Are you sure? (Y/N): {}".format(R, N))
+        if answer.strip().lower() != "y":
+            return
     info("Cleaning workspace...")
     for pattern in [SRC_UNPACK / "*.img", TGT_UNPACK / "*.img"]:
         for f in pattern.parent.glob(pattern.name):
@@ -250,6 +270,9 @@ def read_config():
     if not CONFIG.exists():
         info("config.ini not found, will create template")
         create_config()
+        if AUTO_MODE:
+            err("config.ini not found, template created. Edit it first.")
+            sys.exit(1)
         print("  {}  [!] Edit config.ini first{}".format(Y, N))
         pause()
         raise ReturnToMenu()
@@ -289,6 +312,11 @@ def read_config():
             TIMEOUT = int(val.strip())
         elif key == "retry":
             RETRY = int(val.strip())
+    # CLI 覆盖
+    if CLI_SOURCE:
+        SRC_URL = CLI_SOURCE
+    if CLI_TARGET:
+        TGT_URL = CLI_TARGET
     info("Config loaded. SRC_URL=[{}]".format(SRC_URL))
     info("Config loaded. TGT_URL=[{}]".format(TGT_URL))
 
@@ -507,7 +535,7 @@ def unpack_all_img(img_dir, out_dir, label):
     img_dir = Path(img_dir)
     out_dir = Path(out_dir)
     os.makedirs(out_dir, exist_ok=True)
-    for part in ["system", "system_ext", "product", "odm"]:
+    for part in ["system", "system_ext", "product", "odm", "mi_ext"]:
         img = img_dir / (part + ".img")
         if img.exists():
             info("Processing {}.img ...".format(part))
@@ -625,19 +653,24 @@ def pack_one_partition(part, fs_dir, pack_cfg, lpc_args, counters):
 
 def copy_partition_image(part, src_file, pack_cfg, lpc_args, counters):
     # 从 payload 镜像直接复制到 packed（mi_ext / vendor / vendor_dlkm）
-    # 原 bat 行为：失败时 pause 后继续（不返回菜单）
     if not src_file.exists():
         err("{}.img not found in payload".format(part))
+        if AUTO_MODE:
+            return
         pause()
         return
     try:
         shutil.copy2(src_file, PACK_OUT / src_file.name)
     except Exception:
         err("{}.img copy failed".format(part))
+        if AUTO_MODE:
+            return
         pause()
         return
     if not (PACK_OUT / src_file.name).exists():
         err("{}.img copy failed".format(part))
+        if AUTO_MODE:
+            return
         pause()
         return
     size = (PACK_OUT / src_file.name).stat().st_size
@@ -675,6 +708,8 @@ def create_super_img(pack_cfg, lpc_args, pack_ok):
     if rc != 0:
         err("lpmake failed")
         log_write("ERROR: lpmake failed to create super.img")
+        if AUTO_MODE:
+            return
         pause()
         return
     log_write("super.img created successfully")
@@ -689,6 +724,9 @@ def create_super_img(pack_cfg, lpc_args, pack_ok):
 def one_click_port():
     global TARGET_DEVICE
 
+    tool_status(pause_after=False)
+    pause_seconds(5)
+
     os.system("cls" if os.name == "nt" else "clear")
     log_write("========== XMAport Session Start ==========")
     log_write("Target Device: {}".format(TARGET_DEVICE))
@@ -701,10 +739,10 @@ def one_click_port():
     print("  {}    Step 1{}  Download ROM packages".format(G, N))
     print("  {}    Step 2{}  Extract archives".format(G, N))
     print("  {}    Step 3{}  Extract payload.bin".format(G, N))
-    print("  {}    Step 4{}  Extract archivesSource".format(G, N))
-    print("  {}    Step 5{}  Extract archivesSource".format(G, N))
-    print("  {}    Step 6{}  Extract archivesSource".format(G, N))
-    print("  {}    Step 7{}  Success".format(G, N))
+    print("  {}    Step 4{}  Unpack images".format(G, N))
+    print("  {}    Step 5{}  Migrate partitions".format(G, N))
+    print("  {}    Step 6{}  Pack partitions".format(G, N))
+    print("  {}    Step 7{}  Output".format(G, N))
     print()
     print("  " + D + "----------------------------------------------------------" + N)
     print()
@@ -715,12 +753,19 @@ def one_click_port():
 
     # 输入/读取目标设备代号
     cfg_txt = WORKSPACE / "config.txt"
-    if not cfg_txt.exists():
+    if CLI_DEVICE:
+        # CLI --device 覆盖
+        TARGET_DEVICE = CLI_DEVICE
+        cfg_txt.write_text("TARGET_DEVICE={}\n".format(TARGET_DEVICE), encoding="gbk")
+    elif not cfg_txt.exists():
+        if AUTO_MODE:
+            err("--device 未指定且 workspace/config.txt 不存在")
+            sys.exit(1)
         print("  {}  Enter target device codename:{}".format(W, N))
         print("  {}  (e.g. sheng, fuxi, cupid, mondrian){}".format(D, N))
         TARGET_DEVICE = prompt("  > ")
         cfg_txt.write_text("TARGET_DEVICE={}\n".format(TARGET_DEVICE), encoding="gbk")
-    if cfg_txt.exists():
+    if cfg_txt.exists() and not TARGET_DEVICE:
         for line in cfg_txt.read_text(encoding="gbk", errors="ignore").splitlines():
             if line.startswith("TARGET_DEVICE="):
                 TARGET_DEVICE = line.split("=", 1)[1].strip()
@@ -733,9 +778,10 @@ def one_click_port():
         W, G, pack_cfg["format"], N, G, pack_cfg["compression"], pack_cfg["compression_level"], N,
         G, pack_cfg["pack_super"], N))
     print()
-    confirm = prompt("  {}SuccessSource(Y/N): {}".format(Y, N))
-    if confirm.strip().lower() != "y":
-        raise ReturnToMenu()
+    if not CLI_YES and not AUTO_MODE:
+        confirm = prompt("  {}SuccessSource(Y/N): {}".format(Y, N))
+        if confirm.strip().lower() != "y":
+            raise ReturnToMenu()
 
     # ---------------- Step 1: 下载 ----------------
     info("=== Step 1/7: Download ROM ===")
@@ -747,6 +793,8 @@ def one_click_port():
         if dl_one(SRC_URL, SRC_DL, "SourceROM") != 0:
             err("Step 1 failed: source ROM download")
             log_write("ERROR: Source ROM download failed")
+            if AUTO_MODE:
+                sys.exit(1)
             pause()
             raise ReturnToMenu()
     if TGT_URL:
@@ -754,6 +802,8 @@ def one_click_port():
         if dl_one(TGT_URL, TGT_DL, "TargetROM") != 0:
             err("Step 1 failed: target ROM download")
             log_write("ERROR: Target ROM download failed")
+            if AUTO_MODE:
+                sys.exit(1)
             pause()
             raise ReturnToMenu()
     info("Step 1 done")
@@ -800,8 +850,8 @@ def one_click_port():
     log_write("Step 5: Migrate start")
     migrate_ok = 0
     migrate_fail = 0
-    mh = TOOLS / "make_hyper.exe"
-    rc = subprocess.call([str(mh), "speed"]) if mh.exists() else 1
+    mh = TOOLS / "make_hyper.py"
+    rc = subprocess.call([PY, str(mh), "speed"]) if mh.exists() else 1
     if rc == 0:
         migrate_ok += 1
         log_write("make_hyper.exe speed: SUCCESS")
@@ -809,6 +859,8 @@ def one_click_port():
         migrate_fail += 1
         err("Step 5 failed: make_hyper.exe speed returned an error")
         log_write("ERROR: make_hyper.exe speed failed")
+        if AUTO_MODE:
+            sys.exit(1)
         pause()
     info("Step 5 done. Success: {} , Fail: {}".format(migrate_ok, migrate_fail))
     log_write("Step 5: Migrate done (OK={}, Fail={})".format(migrate_ok, migrate_fail))
@@ -827,7 +879,7 @@ def one_click_port():
         except Exception:
             pass
 
-    # 传递打包环境变量给 pack_partitions.py（UTC 时间戳 / erofs 旧内核兼容 / is_skip_apex / V13 DEV 标记）
+    # 传递打包环境变量给 pack_partitions.py
     os.environ["XMAPORT_UTC_STAMP"] = str(pack_cfg.get("utc_stamp", ""))
     os.environ["XMAPORT_EROFS_LEGACY"] = str(pack_cfg.get("erofs_old_kernel", "false"))
     os.environ["XMAPORT_IS_SKIP_APEX"] = str(pack_cfg.get("is_skip_apex", "false"))
@@ -869,6 +921,8 @@ def one_click_port():
         pack_one_partition("odm", TGT_FS, pack_cfg, lpc_args, counters)
     else:
         err("odm not found in target filesystem")
+        if AUTO_MODE:
+            sys.exit(1)
         pause()
 
     # 复制 mi_ext（源 payload）
@@ -893,6 +947,8 @@ def one_click_port():
             pack_one_partition("vendor", TGT_FS, pack_cfg, lpc_args, counters)
         else:
             err("vendor not found in target filesystem")
+            if AUTO_MODE:
+                sys.exit(1)
             pause()
     else:
         log_write("Copying vendor from target payload")
@@ -956,7 +1012,6 @@ def one_click_port():
         ]:
             label = key.split(".")[-1]
             if label == "manufacturer":
-                # 原 bat 中 manufacturer 显示为 vendor
                 label = "vendor"
             for line in props_text.splitlines():
                 if "=" in line and line.split("=", 1)[0].strip() == key:
@@ -1027,20 +1082,43 @@ def show_menu():
     print("  {}{}  [1] Done Port HyperOS{}        {}Full auto workflow{}".format(G, BD, N, D, N))
     print()
     print("  {}{}  -- Tools --{}".format(Y, BD, N))
-    print("  {}  [A] Check Tools{}".format(W, N))
-    print("  {}  [B] Open Workspace{}".format(W, N))
     print("  {}  [C] Open-Source Credits{}".format(W, N))
     print("  {}  [D] Clean workspace{}".format(W, N))
-    print("  {}  [0] Exit{}".format(R, N))
     print()
     print("  {}{}============================================================{}".format(C, BD, N))
     print()
-    choice = prompt("  {}{}Select [0-1, A-C]: {}".format(Y, BD, N))
+    choice = prompt("  {}{}Select [1, C-D]: {}".format(Y, BD, N))
     return choice.strip().lower()
 
 
+# ---------------- CLI 参数解析 ----------------
+def parse_cli_args():
+    global AUTO_MODE, CLI_DEVICE, CLI_SOURCE, CLI_TARGET, CLI_YES
+    p = argparse.ArgumentParser(
+        description="XMAPort — HyperOS 跨设备移植工具",
+        add_help=True,
+    )
+    p.add_argument("--auto", action="store_true",
+                   help="非交互模式，跳过菜单直接执行一键移植")
+    p.add_argument("--device", default="",
+                   help="目标设备代号 (e.g. sheng, fuxi, cupid)，覆盖 workspace/config.txt")
+    p.add_argument("--source", default="",
+                   help="源 ROM 下载直链，覆盖 config.ini [source] url")
+    p.add_argument("--target", default="",
+                   help="目标 ROM 下载直链，覆盖 config.ini [target] url")
+    p.add_argument("-y", "--yes", action="store_true",
+                   help="跳过所有确认提示")
+    args, _ = p.parse_known_args()
+    AUTO_MODE = args.auto
+    CLI_DEVICE = args.device
+    CLI_SOURCE = args.source
+    CLI_TARGET = args.target
+    CLI_YES = args.yes
+
+
+# ---------------- 入口 ----------------
 def main():
-    # 初始化控制台与目录；工作目录切换到脚本目录（与双击 bat 的行为一致）
+    parse_cli_args()
     init_console()
     try:
         os.chdir(ROOT)
@@ -1049,6 +1127,17 @@ def main():
     for d in ALL_DIRS:
         d.mkdir(parents=True, exist_ok=True)
 
+    if AUTO_MODE:
+        # 非交互：直接跑一键移植，成功 0 / 失败 1
+        try:
+            one_click_port()
+        except ReturnToMenu:
+            sys.exit(1)
+        except KeyboardInterrupt:
+            sys.exit(130)
+        sys.exit(0)
+
+    # 交互模式：原有菜单循环
     while True:
         try:
             ch = show_menu()
@@ -1064,21 +1153,10 @@ def main():
             except KeyboardInterrupt:
                 print()
                 continue
-        elif ch == "a":
-            tool_status()
-        elif ch == "b":
-            os.system('explorer "{}"'.format(WORKSPACE))
         elif ch == "c":
             show_credits()
         elif ch == "d":
             clean_workspace()
-        elif ch == "0":
-            os.system("cls" if os.name == "nt" else "clear")
-            print("  {}============================================================{}".format(C, N))
-            print("  {}  Done Porting!{}".format(G, N))
-            print("  {}============================================================{}".format(C, N))
-            pause()
-            return
         else:
             print("  {}  Invalid input{}".format(R, N))
             pause_seconds(1)
