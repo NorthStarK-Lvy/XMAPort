@@ -1,14 +1,19 @@
-name: Build XMAPort ROM
+name: Build XMAPort
 
 on:
   push:
     branches: [main]
+    paths:
+      - '*.py'
+      - 'tools/**'
+      - 'config.ini'
+      - '.github/workflows/build.yml'
   pull_request:
     branches: [main]
   workflow_dispatch:
     inputs:
       device:
-        description: '目标设备代号 (e.g. sheng, fuxi, cupid)'
+        description: '目标设备代号 (e.g. sheng, fuxi, cupid, mondrian)'
         required: true
         type: string
       source:
@@ -19,9 +24,49 @@ on:
         description: '目标 ROM 直链（留空用 config.ini）'
         required: false
         type: string
+      yes:
+        description: '跳过确认 (true/false)'
+        required: false
+        default: 'true'
+        type: choice
+        options: ['true', 'false']
 
 jobs:
+  porting:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: windows-latest
+    timeout-minutes: 120
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Run XMAPort
+        shell: pwsh
+        run: |
+          $args = @("--auto", "--device", "${{ inputs.device }}")
+          if ("${{ inputs.source }}") { $args += "--source"; $args += "${{ inputs.source }}" }
+          if ("${{ inputs.target }}") { $args += "--target"; $args += "${{ inputs.target }}" }
+          if ("${{ inputs.yes }}" -eq "true") { $args += "-y" }
+          python XMAPort.py @args
+
+      - name: Upload porting output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: XMAPort-output-${{ inputs.device }}
+          path: |
+            workspace/packed/*.img
+            workspace/*.log
+          if-no-files-found: warn
+          retention-days: 7
+
   build:
+    if: github.event_name == 'push'
     runs-on: windows-latest
 
     steps:
@@ -30,33 +75,13 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+          cache: 'pip'
 
       - name: Install PyInstaller
-        run: python -m pip install --upgrade pip && pip install pyinstaller
+        run: pip install pyinstaller
 
       - name: Build EXE
         run: pyinstaller --onefile --console --name XMAPort XMAPort.py
-
-      - name: Run XMAPort (--auto)
-        if: github.event_name == 'workflow_dispatch'
-        shell: pwsh
-        run: |
-          $cmd = "python XMAPort.py --auto -y --device ${{ inputs.device }}"
-          if ("${{ inputs.source }}" -ne "") {
-            $cmd += " --source `"${{ inputs.source }}`""
-          }
-          if ("${{ inputs.target }}" -ne "") {
-            $cmd += " --target `"${{ inputs.target }}`""
-          }
-          Invoke-Expression $cmd
-
-      - name: Upload porting output
-        if: github.event_name == 'workflow_dispatch' && success()
-        uses: actions/upload-artifact@v4
-        with:
-          name: XMAPort-output-${{ inputs.device }}
-          path: workspace/packed/*.img
-          if-no-files-found: ignore
 
       - name: Package release
         shell: pwsh
@@ -72,4 +97,3 @@ jobs:
         with:
           name: XMAPort-win64
           path: XMAPort-win64.zip
-
