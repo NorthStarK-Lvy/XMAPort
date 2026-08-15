@@ -63,7 +63,7 @@ ROOT = Path(sys.executable).resolve().parent if getattr(sys, 'frozen', False) el
 TOOLS = ROOT / "tools"
 WORKSPACE = ROOT / "workspace"
 
-# Python 解释器：原 bat 写死 python，这里优先用当前解释器
+
 PY = sys.executable
 if not PY:
     PY = "python"
@@ -178,10 +178,10 @@ def check_tool(name, src):
 
 
 def tool_status(pause_after=True):
-    os.system("cls" if os.name == "nt" else "clear")
+    # cls removed for CI
     print()
     print("  {}+----------------------------------------------------------+{}".format(C, N))
-    print("  {}|  PortingDone                                               |{}".format(C, N))
+    print("  {}|  Tools Check                                             |{}".format(C, N))
     print("  {}+----------------------------------------------------------+{}".format(C, N))
     print()
     print("  {}{:<20} {}".format(W, "Tool", "Source" + N))
@@ -211,7 +211,7 @@ def show_credits_entry(no, name, desc, url, lic):
 
 
 def show_credits():
-    os.system("cls" if os.name == "nt" else "clear")
+    # cls removed for CI
     print()
     print("  {}{}============================================================{}".format(C, BD, N))
     print("  {}{}  Open-source credits{}".format(C, BD, N))
@@ -232,7 +232,7 @@ def show_credits():
 # ---------------- [D] 清理 workspace ----------------
 def clean_workspace():
     global TARGET_DEVICE
-    os.system("cls" if os.name == "nt" else "clear")
+    # cls removed for CI
     print()
     print("  {}  This will delete all extracted .img and payload.bin files.{}".format(Y, N))
     print("  {}  Including:{}".format(Y, N))
@@ -518,10 +518,24 @@ def extract_payload_bin(rom_dir, out_dir):
         return 0
 
     info("Found payload: {}".format(payload_file))
+    info("Payload size: {} bytes".format(payload_file.stat().st_size))
     info("Extracting payload.bin...")
-    rc = subprocess.call([str(PDUMP), "-o", str(out_dir), str(payload_file)])
+    try:
+        rc = subprocess.call(
+            [str(PDUMP), "-o", str(out_dir), str(payload_file)],
+            timeout=1800,
+        )
+    except subprocess.TimeoutExpired:
+        err("payload-dumper-go timed out (30 min)")
+        return 1
+    except FileNotFoundError:
+        err("payload-dumper-go.exe not found: {}".format(PDUMP))
+        return 1
+    except Exception as e:
+        err("payload-dumper-go crashed: {}".format(e))
+        return 1
     if rc != 0:
-        err("payload-dumper-go failed")
+        err("payload-dumper-go failed (exit code {})".format(rc))
         return 1
     info("Payload extracted to: {}".format(out_dir))
     for f in sorted(out_dir.glob("*.img")):
@@ -653,6 +667,7 @@ def pack_one_partition(part, fs_dir, pack_cfg, lpc_args, counters):
 
 def copy_partition_image(part, src_file, pack_cfg, lpc_args, counters):
     # 从 payload 镜像直接复制到 packed（mi_ext / vendor / vendor_dlkm）
+    # 原 bat 行为：失败时 pause 后继续（不返回菜单）
     if not src_file.exists():
         err("{}.img not found in payload".format(part))
         if AUTO_MODE:
@@ -724,10 +739,10 @@ def create_super_img(pack_cfg, lpc_args, pack_ok):
 def one_click_port():
     global TARGET_DEVICE
 
-    tool_status(pause_after=False)
-    pause_seconds(5)
-
-    os.system("cls" if os.name == "nt" else "clear")
+    if not AUTO_MODE:
+        tool_status(pause_after=False)
+        pause_seconds(5)
+        # cls removed for CI
     log_write("========== XMAport Session Start ==========")
     log_write("Target Device: {}".format(TARGET_DEVICE))
     print()
@@ -739,10 +754,10 @@ def one_click_port():
     print("  {}    Step 1{}  Download ROM packages".format(G, N))
     print("  {}    Step 2{}  Extract archives".format(G, N))
     print("  {}    Step 3{}  Extract payload.bin".format(G, N))
-    print("  {}    Step 4{}  Unpack images".format(G, N))
-    print("  {}    Step 5{}  Migrate partitions".format(G, N))
-    print("  {}    Step 6{}  Pack partitions".format(G, N))
-    print("  {}    Step 7{}  Output".format(G, N))
+    print("  {}    Step 4{}  Extract archivesSource".format(G, N))
+    print("  {}    Step 5{}  Extract archivesSource".format(G, N))
+    print("  {}    Step 6{}  Extract archivesSource".format(G, N))
+    print("  {}    Step 7{}  Success".format(G, N))
     print()
     print("  " + D + "----------------------------------------------------------" + N)
     print()
@@ -879,7 +894,7 @@ def one_click_port():
         except Exception:
             pass
 
-    # 传递打包环境变量给 pack_partitions.py
+    # 传递打包环境变量给 pack_partitions.py（UTC 时间戳 / erofs 旧内核兼容 / is_skip_apex / V13 DEV 标记）
     os.environ["XMAPORT_UTC_STAMP"] = str(pack_cfg.get("utc_stamp", ""))
     os.environ["XMAPORT_EROFS_LEGACY"] = str(pack_cfg.get("erofs_old_kernel", "false"))
     os.environ["XMAPORT_IS_SKIP_APEX"] = str(pack_cfg.get("is_skip_apex", "false"))
@@ -1012,6 +1027,7 @@ def one_click_port():
         ]:
             label = key.split(".")[-1]
             if label == "manufacturer":
+                # 原 bat 中 manufacturer 显示为 vendor
                 label = "vendor"
             for line in props_text.splitlines():
                 if "=" in line and line.split("=", 1)[0].strip() == key:
@@ -1076,7 +1092,7 @@ def print_banner():
 
 
 def show_menu():
-    os.system("cls" if os.name == "nt" else "clear")
+    # cls removed for CI
     print_banner()
     print()
     print("  {}{}  [1] Done Port HyperOS{}        {}Full auto workflow{}".format(G, BD, N, D, N))
@@ -1091,7 +1107,6 @@ def show_menu():
     return choice.strip().lower()
 
 
-# ---------------- CLI 参数解析 ----------------
 def parse_cli_args():
     global AUTO_MODE, CLI_DEVICE, CLI_SOURCE, CLI_TARGET, CLI_YES
     p = argparse.ArgumentParser(
@@ -1116,7 +1131,6 @@ def parse_cli_args():
     CLI_YES = args.yes
 
 
-# ---------------- 入口 ----------------
 def main():
     parse_cli_args()
     init_console()
