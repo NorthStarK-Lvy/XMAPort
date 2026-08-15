@@ -29,27 +29,15 @@ BD = "\x1b[1m"
 # 调试模式：1 时打印 INFO 日志，0 时隐藏（原 bat 的 DEBUG_MODE）
 DEBUG_MODE = "1"
 
-# ---------------- CLI / auto 模式全局标记 ----------------
-AUTO_MODE = False       # --auto 时为 True
-CLI_DEVICE = ""         # --device
-CLI_SOURCE = ""         # --source
-CLI_TARGET = ""         # --target
-CLI_YES = False         # -y / --yes
-
 
 # ---------------- 控制台准备 ----------------
-def init_console():
-    if AUTO_MODE:
-        # auto 模式：跳过 title 命令，仅做 UTF-8 配置
-        try:
-            sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-            sys.stderr.reconfigure(encoding="utf-8", errors="replace")
-        except Exception:
-            pass
-        return
-    # 交互模式：完整行为
+def init_console(auto=False):
+    # Windows 上先置空 TITLE，再启用 ANSI 虚拟终端（模拟原 bat 的 reg add）
     os.system("")
-    os.system("title XMAPort 260815.Beta")
+    # 设置控制台窗口标题（auto 模式下跳过，CI 无窗口）
+    if not auto:
+        os.system("title XMAPort 260815.Beta")
+    # 防止非 UTF-8 终端下中文输出崩溃
     try:
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
         sys.stderr.reconfigure(encoding="utf-8", errors="replace")
@@ -58,8 +46,7 @@ def init_console():
 
 
 # ---------------- 路径（脚本所在目录为根） ----------------
-# frozen (PyInstaller --onefile) 时 sys.executable 指向 exe 所在目录
-ROOT = Path(sys.executable).resolve().parent if getattr(sys, 'frozen', False) else Path(__file__).resolve().parent
+ROOT = Path(__file__).resolve().parent
 TOOLS = ROOT / "tools"
 WORKSPACE = ROOT / "workspace"
 
@@ -131,9 +118,6 @@ def prompt(text):
 
 
 def pause():
-    # auto 模式下跳过等待
-    if AUTO_MODE:
-        return
     # 对应原 bat 的 pause：等待任意键
     if sys.stdin and sys.stdin.isatty():
         sys.stdout.write("Please press any key to continue . . . ")
@@ -164,6 +148,11 @@ MAX_CONN = 16
 TIMEOUT = 300
 RETRY = 5
 
+# ---------------- CLI 覆盖参数（由 argparse 写入） ----------------
+CLI_SOURCE_URL = ""
+CLI_TARGET_URL = ""
+CLI_DEVICE = ""
+
 
 # ---------------- [A] 工具状态检查 ----------------
 def check_tool(name, src):
@@ -178,7 +167,7 @@ def check_tool(name, src):
 
 
 def tool_status(pause_after=True):
-    # cls removed for CI
+    os.system("cls" if os.name == "nt" else "clear")
     print()
     print("  {}+----------------------------------------------------------+{}".format(C, N))
     print("  {}|  Tools Check                                             |{}".format(C, N))
@@ -211,7 +200,7 @@ def show_credits_entry(no, name, desc, url, lic):
 
 
 def show_credits():
-    # cls removed for CI
+    os.system("cls" if os.name == "nt" else "clear")
     print()
     print("  {}{}============================================================{}".format(C, BD, N))
     print("  {}{}  Open-source credits{}".format(C, BD, N))
@@ -232,7 +221,7 @@ def show_credits():
 # ---------------- [D] 清理 workspace ----------------
 def clean_workspace():
     global TARGET_DEVICE
-    # cls removed for CI
+    os.system("cls" if os.name == "nt" else "clear")
     print()
     print("  {}  This will delete all extracted .img and payload.bin files.{}".format(Y, N))
     print("  {}  Including:{}".format(Y, N))
@@ -243,10 +232,9 @@ def clean_workspace():
     ]:
         print("  {}    - {}{}".format(D, path, N))
     print()
-    if not CLI_YES:
-        answer = prompt("  {}Are you sure? (Y/N): {}".format(R, N))
-        if answer.strip().lower() != "y":
-            return
+    answer = prompt("  {}Are you sure? (Y/N): {}".format(R, N))
+    if answer.strip().lower() != "y":
+        return
     info("Cleaning workspace...")
     for pattern in [SRC_UNPACK / "*.img", TGT_UNPACK / "*.img"]:
         for f in pattern.parent.glob(pattern.name):
@@ -270,9 +258,6 @@ def read_config():
     if not CONFIG.exists():
         info("config.ini not found, will create template")
         create_config()
-        if AUTO_MODE:
-            err("config.ini not found, template created. Edit it first.")
-            sys.exit(1)
         print("  {}  [!] Edit config.ini first{}".format(Y, N))
         pause()
         raise ReturnToMenu()
@@ -312,13 +297,17 @@ def read_config():
             TIMEOUT = int(val.strip())
         elif key == "retry":
             RETRY = int(val.strip())
-    # CLI 覆盖
-    if CLI_SOURCE:
-        SRC_URL = CLI_SOURCE
-    if CLI_TARGET:
-        TGT_URL = CLI_TARGET
     info("Config loaded. SRC_URL=[{}]".format(SRC_URL))
     info("Config loaded. TGT_URL=[{}]".format(TGT_URL))
+    # CLI 覆盖（--source / --target 优先于 config.ini）
+    if CLI_SOURCE_URL:
+        SRC_URL = CLI_SOURCE_URL
+        info("SRC_URL overridden by --source")
+        log_write("SRC_URL overridden by --source CLI arg")
+    if CLI_TARGET_URL:
+        TGT_URL = CLI_TARGET_URL
+        info("TGT_URL overridden by --target")
+        log_write("TGT_URL overridden by --target CLI arg")
 
 
 def detect_legacy_erofs_marker():
@@ -518,24 +507,10 @@ def extract_payload_bin(rom_dir, out_dir):
         return 0
 
     info("Found payload: {}".format(payload_file))
-    info("Payload size: {} bytes".format(payload_file.stat().st_size))
     info("Extracting payload.bin...")
-    try:
-        rc = subprocess.call(
-            [str(PDUMP), "-o", str(out_dir), str(payload_file)],
-            timeout=1800,
-        )
-    except subprocess.TimeoutExpired:
-        err("payload-dumper-go timed out (30 min)")
-        return 1
-    except FileNotFoundError:
-        err("payload-dumper-go.exe not found: {}".format(PDUMP))
-        return 1
-    except Exception as e:
-        err("payload-dumper-go crashed: {}".format(e))
-        return 1
+    rc = subprocess.call([str(PDUMP), "-o", str(out_dir), str(payload_file)])
     if rc != 0:
-        err("payload-dumper-go failed (exit code {})".format(rc))
+        err("payload-dumper-go failed")
         return 1
     info("Payload extracted to: {}".format(out_dir))
     for f in sorted(out_dir.glob("*.img")):
@@ -670,22 +645,16 @@ def copy_partition_image(part, src_file, pack_cfg, lpc_args, counters):
     # 原 bat 行为：失败时 pause 后继续（不返回菜单）
     if not src_file.exists():
         err("{}.img not found in payload".format(part))
-        if AUTO_MODE:
-            return
         pause()
         return
     try:
         shutil.copy2(src_file, PACK_OUT / src_file.name)
     except Exception:
         err("{}.img copy failed".format(part))
-        if AUTO_MODE:
-            return
         pause()
         return
     if not (PACK_OUT / src_file.name).exists():
         err("{}.img copy failed".format(part))
-        if AUTO_MODE:
-            return
         pause()
         return
     size = (PACK_OUT / src_file.name).stat().st_size
@@ -723,8 +692,6 @@ def create_super_img(pack_cfg, lpc_args, pack_ok):
     if rc != 0:
         err("lpmake failed")
         log_write("ERROR: lpmake failed to create super.img")
-        if AUTO_MODE:
-            return
         pause()
         return
     log_write("super.img created successfully")
@@ -736,13 +703,14 @@ def create_super_img(pack_cfg, lpc_args, pack_ok):
 
 
 # ---------------- 一键移植流水线（对应原 :OneClickPort） ----------------
-def one_click_port():
+def one_click_port(auto=False):
     global TARGET_DEVICE
 
-    if not AUTO_MODE:
-        tool_status(pause_after=False)
+    tool_status(pause_after=False)
+    if not auto:
         pause_seconds(5)
-        # cls removed for CI
+
+    os.system("cls" if os.name == "nt" else "clear")
     log_write("========== XMAport Session Start ==========")
     log_write("Target Device: {}".format(TARGET_DEVICE))
     print()
@@ -763,28 +731,36 @@ def one_click_port():
     print()
 
     # 读取配置
-    read_config()
+    try:
+        read_config()
+    except ReturnToMenu:
+        if auto:
+            err("config.ini not found, cannot continue in auto mode")
+            log_write("ERROR: config.ini missing, auto mode aborted")
+            return 1
+        raise
     pack_cfg = read_packing_config()
 
     # 输入/读取目标设备代号
     cfg_txt = WORKSPACE / "config.txt"
     if CLI_DEVICE:
-        # CLI --device 覆盖
         TARGET_DEVICE = CLI_DEVICE
         cfg_txt.write_text("TARGET_DEVICE={}\n".format(TARGET_DEVICE), encoding="gbk")
-    elif not cfg_txt.exists():
-        if AUTO_MODE:
-            err("--device 未指定且 workspace/config.txt 不存在")
-            sys.exit(1)
-        print("  {}  Enter target device codename:{}".format(W, N))
-        print("  {}  (e.g. sheng, fuxi, cupid, mondrian){}".format(D, N))
-        TARGET_DEVICE = prompt("  > ")
-        cfg_txt.write_text("TARGET_DEVICE={}\n".format(TARGET_DEVICE), encoding="gbk")
-    if cfg_txt.exists() and not TARGET_DEVICE:
+        info("Device codename from --device: {}".format(TARGET_DEVICE))
+    elif cfg_txt.exists():
         for line in cfg_txt.read_text(encoding="gbk", errors="ignore").splitlines():
             if line.startswith("TARGET_DEVICE="):
                 TARGET_DEVICE = line.split("=", 1)[1].strip()
                 break
+    elif auto:
+        err("Target device codename not provided (--device) and config.txt missing")
+        log_write("ERROR: no device codename in auto mode")
+        return 1
+    else:
+        print("  {}  Enter target device codename:{}".format(W, N))
+        print("  {}  (e.g. sheng, fuxi, cupid, mondrian){}".format(D, N))
+        TARGET_DEVICE = prompt("  > ")
+        cfg_txt.write_text("TARGET_DEVICE={}\n".format(TARGET_DEVICE), encoding="gbk")
 
     print("  {}  Source URL:   {}{}{}".format(W, C, SRC_URL[:50], N))
     print("  {}  Target URL:   {}{}{}".format(W, C, TGT_URL[:50], N))
@@ -793,10 +769,12 @@ def one_click_port():
         W, G, pack_cfg["format"], N, G, pack_cfg["compression"], pack_cfg["compression_level"], N,
         G, pack_cfg["pack_super"], N))
     print()
-    if not CLI_YES and not AUTO_MODE:
+    if not auto:
         confirm = prompt("  {}SuccessSource(Y/N): {}".format(Y, N))
         if confirm.strip().lower() != "y":
             raise ReturnToMenu()
+    else:
+        info("Auto mode: skipping confirmation, proceeding...")
 
     # ---------------- Step 1: 下载 ----------------
     info("=== Step 1/7: Download ROM ===")
@@ -808,8 +786,8 @@ def one_click_port():
         if dl_one(SRC_URL, SRC_DL, "SourceROM") != 0:
             err("Step 1 failed: source ROM download")
             log_write("ERROR: Source ROM download failed")
-            if AUTO_MODE:
-                sys.exit(1)
+            if auto:
+                return 1
             pause()
             raise ReturnToMenu()
     if TGT_URL:
@@ -817,8 +795,8 @@ def one_click_port():
         if dl_one(TGT_URL, TGT_DL, "TargetROM") != 0:
             err("Step 1 failed: target ROM download")
             log_write("ERROR: Target ROM download failed")
-            if AUTO_MODE:
-                sys.exit(1)
+            if auto:
+                return 1
             pause()
             raise ReturnToMenu()
     info("Step 1 done")
@@ -874,8 +852,6 @@ def one_click_port():
         migrate_fail += 1
         err("Step 5 failed: make_hyper.exe speed returned an error")
         log_write("ERROR: make_hyper.exe speed failed")
-        if AUTO_MODE:
-            sys.exit(1)
         pause()
     info("Step 5 done. Success: {} , Fail: {}".format(migrate_ok, migrate_fail))
     log_write("Step 5: Migrate done (OK={}, Fail={})".format(migrate_ok, migrate_fail))
@@ -936,8 +912,7 @@ def one_click_port():
         pack_one_partition("odm", TGT_FS, pack_cfg, lpc_args, counters)
     else:
         err("odm not found in target filesystem")
-        if AUTO_MODE:
-            sys.exit(1)
+        log_write("ERROR: odm not found in target filesystem")
         pause()
 
     # 复制 mi_ext（源 payload）
@@ -962,8 +937,7 @@ def one_click_port():
             pack_one_partition("vendor", TGT_FS, pack_cfg, lpc_args, counters)
         else:
             err("vendor not found in target filesystem")
-            if AUTO_MODE:
-                sys.exit(1)
+            log_write("ERROR: vendor not found in target filesystem")
             pause()
     else:
         log_write("Copying vendor from target payload")
@@ -1037,10 +1011,12 @@ def one_click_port():
     print()
     print("  {}{}============================================================{}".format(C, BD, N))
     print()
-    pause()
+    if not auto:
+        pause()
+    return 0
 
 
-# ---------------- 全局崩溃报告（参照 TIK5 的 error 面板思路，无 rich 依赖） ----------------
+# ---------------- 全局崩溃报告 ----------------
 def crash_report(exc_type, exc, tb):
     # KeyboardInterrupt 视为正常退出，不算崩溃
     if exc_type is KeyboardInterrupt:
@@ -1078,7 +1054,7 @@ def crash_report(exc_type, exc, tb):
 sys.excepthook = crash_report
 
 
-# ---------------- 主菜单（对应原 :Menu + :Exit） ----------------
+# ---------------- 主菜单 ----------------
 def print_banner():
     print()
     print("  {}{}============================================================{}".format(C, BD, N))
@@ -1092,7 +1068,7 @@ def print_banner():
 
 
 def show_menu():
-    # cls removed for CI
+    os.system("cls" if os.name == "nt" else "clear")
     print_banner()
     print()
     print("  {}{}  [1] Done Port HyperOS{}        {}Full auto workflow{}".format(G, BD, N, D, N))
@@ -1107,33 +1083,35 @@ def show_menu():
     return choice.strip().lower()
 
 
-def parse_cli_args():
-    global AUTO_MODE, CLI_DEVICE, CLI_SOURCE, CLI_TARGET, CLI_YES
-    p = argparse.ArgumentParser(
-        description="XMAPort — HyperOS 跨设备移植工具",
-        add_help=True,
+# ---------------- CLI 参数解析 ----------------
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="XMAPort - Android ROM porting tool",
     )
-    p.add_argument("--auto", action="store_true",
-                   help="非交互模式，跳过菜单直接执行一键移植")
-    p.add_argument("--device", default="",
-                   help="目标设备代号 (e.g. sheng, fuxi, cupid)，覆盖 workspace/config.txt")
-    p.add_argument("--source", default="",
-                   help="源 ROM 下载直链，覆盖 config.ini [source] url")
-    p.add_argument("--target", default="",
-                   help="目标 ROM 下载直链，覆盖 config.ini [target] url")
-    p.add_argument("-y", "--yes", action="store_true",
-                   help="跳过所有确认提示")
-    args, _ = p.parse_known_args()
-    AUTO_MODE = args.auto
-    CLI_DEVICE = args.device
-    CLI_SOURCE = args.source
-    CLI_TARGET = args.target
-    CLI_YES = args.yes
+    parser.add_argument("--auto", action="store_true",
+                        help="Non-interactive mode for CI/GitHub Actions")
+    parser.add_argument("--device", default="",
+                        help="Target device codename (overrides config.txt)")
+    parser.add_argument("--source", default="",
+                        help="Source ROM URL (overrides config.ini [source] url)")
+    parser.add_argument("--target", default="",
+                        help="Target ROM URL (overrides config.ini [target] url)")
+    parser.add_argument("-y", "--yes", action="store_true",
+                        help="Skip confirmation prompts")
+    return parser.parse_args()
 
 
 def main():
-    parse_cli_args()
-    init_console()
+    global CLI_SOURCE_URL, CLI_TARGET_URL, CLI_DEVICE
+    args = parse_args()
+
+    # CLI 覆盖写入全局变量
+    CLI_SOURCE_URL = args.source
+    CLI_TARGET_URL = args.target
+    CLI_DEVICE = args.device
+
+    # 初始化控制台与目录；工作目录切换到脚本目录（与双击 bat 的行为一致）
+    init_console(auto=args.auto)
     try:
         os.chdir(ROOT)
     except Exception:
@@ -1141,17 +1119,16 @@ def main():
     for d in ALL_DIRS:
         d.mkdir(parents=True, exist_ok=True)
 
-    if AUTO_MODE:
-        # 非交互：直接跑一键移植，成功 0 / 失败 1
+    if args.auto:
+        log_write("========== XMAport Auto Mode Start ==========")
         try:
-            one_click_port()
+            result = one_click_port(auto=True)
         except ReturnToMenu:
-            sys.exit(1)
-        except KeyboardInterrupt:
-            sys.exit(130)
-        sys.exit(0)
+            err("Workflow aborted (ReturnToMenu) in auto mode")
+            log_write("ERROR: auto mode aborted via ReturnToMenu")
+            result = 1
+        sys.exit(result if result is not None else 0)
 
-    # 交互模式：原有菜单循环
     while True:
         try:
             ch = show_menu()
