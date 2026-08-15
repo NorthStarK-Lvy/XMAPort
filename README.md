@@ -14,15 +14,6 @@ XMAPort 是一个面向Xiaomi/REDMI手机的，用于移植 HyperOS (Android 15/
 
 正在测试Github Actions
 
-## 环境要求
-
-| 依赖 | 说明 |
-|---|---|
-| Windows 10/11 (64 位) | 脚本为 Windows Batch，依赖 7z、cygwin 等 Windows 二进制 |
-| Python 3.8+ | 需已加入系统 PATH（解包/打包脚本依赖） |
-| 磁盘空间 | 建议 40GB 以上（两份 ROM 包 + 解包产物 + 打包产物） |
-| 网络 | 可访问 ROM 下载直链（小米/Redmi 阿里云 OSS） |
-
 ## 快速开始
 
 1. 确保电脑环境内有python
@@ -35,7 +26,7 @@ XMAPort 是一个面向Xiaomi/REDMI手机的，用于移植 HyperOS (Android 15/
 6. 确认参数无误后开始，最终镜像输出到 `workspace\packed\`
 
 >如果您想下载工具到本地跑包的同时偷个懒的话，您现在可以使用python XMAPort.py --auto --device sheng来一键流水线完成。
-/n
+
 
 >同时，如果您懒得编辑config.ini，也可以使用python XMAPort.py --auto --device sheng \
   --source https://.../source_rom.zip \
@@ -66,6 +57,15 @@ XMAPort 是一个面向Xiaomi/REDMI手机的，用于移植 HyperOS (Android 15/
 
 >不建议旗舰机型(当前为Xiaomi 17系列)使用本工具
 
+
+## 环境要求
+
+| 依赖 | 说明 |
+|---|---|
+| Windows 10/11 (64 位) | 脚本为 Windows Batch，依赖 7z、cygwin 等 Windows 二进制 |
+| Python 3.8+ | 需已加入系统 PATH（解包/打包脚本依赖） |
+| 磁盘空间 | 建议 40GB 以上（两份 ROM 包 + 解包产物 + 打包产物） |
+| 网络 | 可访问 ROM 下载直链（小米/Redmi 阿里云 OSS） |
 ## 配置说明（config.ini）
 
 ### [source] / [target]
