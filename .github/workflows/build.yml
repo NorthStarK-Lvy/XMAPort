@@ -60,6 +60,8 @@ jobs:
   build:
     if: github.event_name == 'push'
     runs-on: windows-latest
+    permissions:
+      contents: write
 
     steps:
       - uses: actions/checkout@v6
@@ -83,8 +85,8 @@ jobs:
           Copy-Item config.ini release\
           Compress-Archive -Path release\* -DestinationPath XMAPort-win64.zip
 
-      - name: Upload artifact
-        uses: actions/upload-artifact@v7
-        with:
-          name: XMAPort-win64
-          path: XMAPort-win64.zip
+      - name: Upload to Release
+        shell: pwsh
+        run: |
+          $tag = "v${{ github.run_number }}"
+          gh release create $tag XMAPort-win64.zip --title "XMAPort $tag" --notes "自动构建的 Windows 版本。`n`n用法：解压后运行 XMAPort.exe（或使用命令行参数 --auto/--device/--source/--target）。" --latest
