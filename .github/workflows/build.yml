@@ -66,23 +66,14 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - uses: actions/setup-python@v6
-        with:
-          python-version: '3.12'
-
-      - name: Install PyInstaller
-        run: pip install pyinstaller
-
-      - name: Build EXE
-        run: pyinstaller --onefile --console --name XMAPort XMAPort.py
-
       - name: Package release
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path release
-          Copy-Item dist\XMAPort.exe release\
+          Copy-Item XMAPort.py release\
           Copy-Item -Recurse tools release\
           Copy-Item config.ini release\
+          Remove-Item -Recurse -Force release\tools\jre\legal
           Compress-Archive -Path release\* -DestinationPath XMAPort-win64.zip
 
       - name: Upload to Release
@@ -90,10 +81,10 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          $tag = "v${{ github.run_number }}"
+          $tag = "XMAPort-$(Get-Date -Format yyyyMMdd)-Beta"
           if (gh release view $tag 2>$null) {
             gh release upload $tag XMAPort-win64.zip --clobber
             gh release edit $tag --latest
           } else {
-            gh release create $tag XMAPort-win64.zip --title "XMAPort $tag" --notes "自动构建的 Windows 版本。`n`n用法：解压后运行 XMAPort.exe（或使用命令行参数 --auto/--device/--source/--target）。" --latest
+            gh release create $tag XMAPort-win64.zip --title "XMAPort $(Get-Date -Format yyyyMMdd) Beta" --notes "自动构建的 Windows 版本。`n`n用法：解压后运行 XMAPort.exe（或使用命令行参数 --auto/--device/--source/--target）。" --latest
           }
