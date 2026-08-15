@@ -73,7 +73,6 @@ jobs:
           Copy-Item XMAPort.py release\
           Copy-Item -Recurse tools release\
           Copy-Item config.ini release\
-          Remove-Item -Recurse -Force release\tools\jre\legal
           Compress-Archive -Path release\* -DestinationPath XMAPort-win64.zip
 
       - name: Upload to Release
