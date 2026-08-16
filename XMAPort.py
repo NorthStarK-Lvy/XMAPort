@@ -995,7 +995,9 @@ def one_click_port(auto=False):
             print("  {}    {}.img  {} bytes{}".format(G, part, img.stat().st_size, N))
 
     # ROM Info（从源分区 build.prop 读取）
+    rom_info_lines = []
     print()
+    rom_info_lines.append("---------- ROM Info ----------")
     print("  {}  ---------- ROM Info ----------{}".format(C, N))
     bp_candidates = [
         SRC_FS / "odm" / "etc" / "build.prop",
@@ -1009,6 +1011,7 @@ def one_click_port(auto=False):
             break
     if bp_path is None:
         print("  {}  [ERR] build.prop not found{}".format(R, N))
+        rom_info_lines.append("[ERR] build.prop not found")
     else:
         try:
             props_text = bp_path.read_text(encoding="utf-8", errors="replace")
@@ -1025,9 +1028,18 @@ def one_click_port(auto=False):
                 label = "vendor"
             for line in props_text.splitlines():
                 if "=" in line and line.split("=", 1)[0].strip() == key:
-                    print("  {}  {}: {}{}{}".format(W, label.ljust(10), C, line.split("=", 1)[1].strip(), N))
+                    val = line.split("=", 1)[1].strip()
+                    print("  {}  {}: {}{}{}".format(W, label.ljust(10), C, val, N))
+                    rom_info_lines.append("{}: {}".format(label, val))
                     break
     print("  {}  ------------------------------{}".format(C, N))
+    rom_info_lines.append("-------------------------------")
+    if AUTO_MODE:
+        try:
+            (WORKSPACE / "rom_info.txt").write_text(
+                "\n".join(rom_info_lines), encoding="utf-8")
+        except Exception:
+            pass
     print()
     print("  {}{}============================================================{}".format(C, BD, N))
     print()
