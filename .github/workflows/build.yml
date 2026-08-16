@@ -61,22 +61,25 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           $date = Get-Date -Format "MMdd"
-          $prefix = "XMAPort-Output-${{ inputs.device }}-$date"
           $n = 1
-          while (gh release view "${prefix}#$n" 2>$null) { $n++ }
-          $tag = "${prefix}#$n"
-          $files = @(Get-ChildItem "workspace\super-${{ inputs.device }}.7z.*" | ForEach-Object { $_.FullName })
-          if (-not $files) { Write-Error "no split volumes found"; exit 1 }
-          $romInfo = "ROM Info:" + [Environment]::NewLine
+          $prefix = "XMAPort-Output-${{ inputs.device }}-$date"
+          while (gh release view "$prefix-$n" 2>$null) { $n++ }
+          $tag = "$prefix-$n"
+
+          $volFiles = @(Get-ChildItem "workspace\super-${{ inputs.device }}.7z.*" | ForEach-Object { $_.FullName })
+          if (-not $volFiles) { Write-Error "no split volumes found"; exit 1 }
+          $logFiles = @(Get-ChildItem "workspace\*.log" -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName })
+          $allFiles = $volFiles + $logFiles
+
+          $romInfo = "ROM Info:`n"
           if (Test-Path workspace\rom_info.txt) {
-            $romInfo += (Get-Content workspace\rom_info.txt -Encoding UTF8 | Where-Object { $_ -match '^\S+:\s*\S+' }) -join [Environment]::NewLine
+            $romInfo += Get-Content workspace\rom_info.txt -Encoding UTF8 | Where-Object { $_ -match '^\S+:\s*\S+' }
           } else {
             $romInfo += "device: ${{ inputs.device }}"
           }
-          $notes = "移植输出（分卷 7z，每卷 <=2GB）。`n`n" + $romInfo + "`n`n合并解压：`n7z x super-${{ inputs.device }}.7z.001"
-          gh release create $tag $files --title "XMAPort ${{ inputs.device }} $date #$n" --notes $notes --latest
-          $logFiles = @(Get-ChildItem "workspace\*.log" -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName })
-          if ($logFiles) { gh release upload $tag $logFiles }
+          $notes = "移植输出（分卷 7z，每卷 <=2GB）。`n`n$romInfo`n`n合并解压：`n7z x super-${{ inputs.device }}.7z.001"
+
+          gh release create $tag $allFiles --title "XMAPort ${{ inputs.device }} $date #$n" --notes $notes --latest
 
   build:
     if: github.event_name == 'push'
@@ -102,10 +105,8 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          $tag = "XMAPort-$(Get-Date -Format yyyyMMdd)-Beta"
-          if (gh release view $tag 2>$null) {
-            gh release upload $tag XMAPort-win64.zip --clobber
-            gh release edit $tag --latest
-          } else {
-            gh release create $tag XMAPort-win64.zip --title "XMAPort $(Get-Date -Format yyyyMMdd) Beta" --notes "自动构建的 Windows 版本。`n`n用法：解压后运行 XMAPort.exe（或使用命令行参数 --auto/--device/--source/--target）。" --latest
-          }
+          $date = Get-Date -Format "yyyyMMdd"
+          $n = 1
+          $tag = "XMAPort-${date}-Beta-$n"
+          while (gh release view $tag 2>$null) { $n++; $tag = "XMAPort-${date}-Beta-$n" }
+          gh release create $tag XMAPort-win64.zip --title "XMAPort ${date} Beta" --notes "自动构建的 Windows 版本。`n`n用法：解压后运行 XMAPort.exe（或使用命令行参数 --auto/--device/--source/--target）。" --latest
