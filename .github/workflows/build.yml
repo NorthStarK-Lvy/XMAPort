@@ -46,13 +46,19 @@ jobs:
           if ("${{ inputs.target }}") { $args += "--target"; $args += "${{ inputs.target }}" }
           python XMAPort.py @args
 
+      - name: Compress super.img
+        shell: pwsh
+        run: |
+          if (-not (Test-Path workspace\packed\super.img)) { Write-Error "super.img not found"; exit 1 }
+          .\tools\7z.exe a -t7z -mx=5 workspace\super-${{ inputs.device }}.7z workspace\packed\super.img
+
       - name: Upload porting output
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: XMAPort-output-${{ inputs.device }}
           path: |
-            workspace/packed/*.img
+            workspace/super-*.7z
             workspace/*.log
           if-no-files-found: warn
           retention-days: 7
@@ -73,6 +79,7 @@ jobs:
           Copy-Item XMAPort.py release\
           Copy-Item -Recurse tools release\
           Copy-Item config.ini release\
+          Remove-Item -Recurse -Force release\tools\jre\legal
           Compress-Archive -Path release\* -DestinationPath XMAPort-win64.zip
 
       - name: Upload to Release
@@ -80,21 +87,10 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          $date = Get-Date -Format yyyyMMdd
-          $base = "XMAPort-$date-Beta"
-
-          # 统计今天已有的 release 数量，决定这是今天的第几个版本
-          $todayTags = gh release list --limit 100 --json tagName --jq '.[].tagName' |
-            Where-Object { $_ -like "$base*" }
-          $count = @($todayTags).Count + 1
-
-          if ($count -eq 1) {
-            $tag = $base
+          $tag = "XMAPort-$(Get-Date -Format yyyyMMdd)-Beta"
+          if (gh release view $tag 2>$null) {
+            gh release upload $tag XMAPort-win64.zip --clobber
+            gh release edit $tag --latest
           } else {
-            $tag = "$base-$count"
+            gh release create $tag XMAPort-win64.zip --title "XMAPort $(Get-Date -Format yyyyMMdd) Beta" --notes "自动构建的 Windows 版本。`n`n用法：解压后运行 XMAPort.exe（或使用命令行参数 --auto/--device/--source/--target）。" --latest
           }
-
-          $notes = "XMAPort $date Beta On Windows（今日第 $count 个版本）" +
-            "`n`n用法：解压后运行 XMAPort.py（或使用命令行参数 --auto/--device/--source/--target）。"
-
-          gh release create $tag XMAPort-win64.zip --title "XMAPort $date Beta #$count" --notes $notes --latest
