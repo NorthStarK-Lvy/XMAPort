@@ -60,17 +60,23 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          $tag = "XMAPort-Output-${{ inputs.device }}-$(Get-Date -Format yyyyMMdd)"
+          $date = Get-Date -Format "MMdd"
+          $prefix = "XMAPort-Output-${{ inputs.device }}-$date"
+          $n = 1
+          while (gh release view "${prefix}#$n" 2>$null) { $n++ }
+          $tag = "${prefix}#$n"
           $files = @(Get-ChildItem "workspace\super-${{ inputs.device }}.7z.*" | ForEach-Object { $_.FullName })
           if (-not $files) { Write-Error "no split volumes found"; exit 1 }
-          if (gh release view $tag 2>$null) {
-            gh release upload $tag $files --clobber
-            gh release edit $tag --latest
+          $romInfo = "ROM Info:" + [Environment]::NewLine
+          if (Test-Path workspace\rom_info.txt) {
+            $romInfo += (Get-Content workspace\rom_info.txt -Encoding UTF8 | Where-Object { $_ -match '^\S+:\s*\S+' }) -join [Environment]::NewLine
           } else {
-            gh release create $tag $files --title "XMAPort ${{ inputs.device }} $(Get-Date -Format yyyyMMdd)" --notes "移植输出（分卷 7z，每卷 <=2GB）。`n`n合并解压：`n7z x super-${{ inputs.device }}.7z.001" --latest
+            $romInfo += "device: ${{ inputs.device }}"
           }
+          $notes = "移植输出（分卷 7z，每卷 <=2GB）。`n`n" + $romInfo + "`n`n合并解压：`n7z x super-${{ inputs.device }}.7z.001"
+          gh release create $tag $files --title "XMAPort ${{ inputs.device }} $date #$n" --notes $notes --latest
           $logFiles = @(Get-ChildItem "workspace\*.log" -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName })
-          if ($logFiles) { gh release upload $tag $logFiles --clobber }
+          if ($logFiles) { gh release upload $tag $logFiles }
 
   build:
     if: github.event_name == 'push'
