@@ -85,6 +85,8 @@ XMAPort 是一个面向Xiaomi/REDMI手机的，用于移植 HyperOS (Android 15/
 
 ### [packing]
 
+### 请务必调整 `device_size` 为您的super分区的正确大小，否则容易出现super空间不足而报错！
+
 | 配置项 | 默认值 | 说明 |
 |---|---|---|
 | `pack_super` | false | 是否打包 super.img（false 仅打包分区） |
