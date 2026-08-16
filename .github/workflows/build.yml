@@ -107,5 +107,5 @@ jobs:
             gh release upload $tag XMAPort-win64.zip --clobber
             gh release edit $tag --latest
           } else {
-            gh release create $tag XMAPort-win64.zip --title "XMAPort $(Get-Date -Format yyyyMMdd) Beta" --notes "自动构建的 Windows 版本。`n`n用法：解压后运行 XMAPort.py（或使用命令行参数 --auto/--device/--source/--target）。" --latest
+            gh release create $tag XMAPort-win64.zip --title "XMAPort $(Get-Date -Format yyyyMMdd) Beta" --notes "自动构建的 Windows 版本。`n`n用法：解压后运行 XMAPort.exe（或使用命令行参数 --auto/--device/--source/--target）。" --latest
           }
