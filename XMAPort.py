@@ -29,14 +29,19 @@ BD = "\x1b[1m"
 # 调试模式：1 时打印 INFO 日志，0 时隐藏（原 bat 的 DEBUG_MODE）
 DEBUG_MODE = "1"
 
+# auto 模式标志（--auto CLI），控制是否静默外部工具实时进度输出
+AUTO_MODE = False
+
 
 # ---------------- 控制台准备 ----------------
 def init_console(auto=False):
+    global AUTO_MODE
+    AUTO_MODE = auto
     # Windows 上先置空 TITLE，再启用 ANSI 虚拟终端（模拟原 bat 的 reg add）
     os.system("")
     # 设置控制台窗口标题（auto 模式下跳过，CI 无窗口）
     if not auto:
-        os.system("title XMAPort 260815.Beta")
+        os.system("title XMAPort 260816.Beta")
     # 防止非 UTF-8 终端下中文输出崩溃
     try:
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -170,7 +175,7 @@ def tool_status(pause_after=True):
     os.system("cls" if os.name == "nt" else "clear")
     print()
     print("  {}+----------------------------------------------------------+{}".format(C, N))
-    print("  {}|  Tools Check                                             |{}".format(C, N))
+    print("  {}|  Tools Checking, please wait for 5 seconds                |{}".format(C, N))
     print("  {}+----------------------------------------------------------+{}".format(C, N))
     print()
     print("  {}{:<20} {}".format(W, "Tool", "Source" + N))
@@ -508,9 +513,20 @@ def extract_payload_bin(rom_dir, out_dir):
 
     info("Found payload: {}".format(payload_file))
     info("Extracting payload.bin...")
-    rc = subprocess.call([str(PDUMP), "-o", str(out_dir), str(payload_file)])
+    cmd = [str(PDUMP), "-o", str(out_dir), str(payload_file)]
+    if AUTO_MODE:
+        proc = subprocess.run(cmd, stdout=subprocess.PIPE,
+                              stderr=subprocess.STDOUT, text=True,
+                              errors="replace")
+        rc = proc.returncode
+    else:
+        rc = subprocess.call(cmd)
     if rc != 0:
         err("payload-dumper-go failed")
+        if AUTO_MODE and proc.stdout:
+            tail = "\n".join(proc.stdout.strip().splitlines()[-30:])
+            print(tail, flush=True)
+            log_write(tail)
         return 1
     info("Payload extracted to: {}".format(out_dir))
     for f in sorted(out_dir.glob("*.img")):
@@ -688,6 +704,7 @@ def create_super_img(pack_cfg, lpc_args, pack_ok):
     if pack_cfg.get("sparse", "true").lower() == "true":
         cmd.append("--sparse")
     cmd += ["--output=" + str(PACK_OUT / "super.img")]
+    info("lpmake command: " + subprocess.list2cmdline(cmd))
     rc = subprocess.call(cmd)
     if rc != 0:
         err("lpmake failed")
@@ -770,7 +787,7 @@ def one_click_port(auto=False):
         G, pack_cfg["pack_super"], N))
     print()
     if not auto:
-        confirm = prompt("  {}SuccessSource(Y/N): {}".format(Y, N))
+        confirm = prompt("  {}Are These Right? (Y/N): {}".format(Y, N))
         if confirm.strip().lower() != "y":
             raise ReturnToMenu()
     else:
