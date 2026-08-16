@@ -60,8 +60,11 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          $stamp = Get-Date -Format "MMdd-HHmmss"
-          $tag = "XMAPort-Output-${{ inputs.device }}-$stamp"
+          $date = Get-Date -Format "MMdd"
+          $n = 1
+          $prefix = "XMAPort-Output-${{ inputs.device }}-$date"
+          while (gh release view "$prefix-$n" 2>$null) { $n++ }
+          $tag = "$prefix-$n"
 
           $volFiles = @(Get-ChildItem "workspace\super-${{ inputs.device }}.7z.*" | ForEach-Object { $_.FullName })
           if (-not $volFiles) { Write-Error "no split volumes found"; exit 1 }
@@ -76,7 +79,7 @@ jobs:
           }
           $notes = "移植输出（分卷 7z，每卷 <=2GB）。`n`n$romInfo`n`n合并解压：`n7z x super-${{ inputs.device }}.7z.001"
 
-          gh release create $tag $allFiles --title "XMAPort ${{ inputs.device }} $stamp" --notes $notes --latest
+          gh release create $tag $allFiles --title "XMAPort ${{ inputs.device }} $date #$n" --notes $notes --latest
 
   build:
     if: github.event_name == 'push'
