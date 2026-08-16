@@ -48,6 +48,9 @@ def init_console(auto=False):
         sys.stderr.reconfigure(encoding="utf-8", errors="replace")
     except Exception:
         pass
+    # 让子进程脚本（pack_partitions / make_hyper / extract_img 等）同样用 UTF-8 输出，
+    # 避免 CI 英文环境 cp1252 下打印中文时 UnicodeEncodeError
+    os.environ["PYTHONIOENCODING"] = "utf-8"
 
 
 # ---------------- 路径（脚本所在目录为根） ----------------
