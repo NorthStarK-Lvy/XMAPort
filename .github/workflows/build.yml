@@ -30,6 +30,8 @@ jobs:
     if: github.event_name == 'workflow_dispatch'
     runs-on: windows-latest
     timeout-minutes: 120
+    permissions:
+      contents: write
 
     steps:
       - uses: actions/checkout@v6
@@ -46,22 +48,29 @@ jobs:
           if ("${{ inputs.target }}") { $args += "--target"; $args += "${{ inputs.target }}" }
           python XMAPort.py @args
 
-      - name: Compress super.img
+      - name: Compress and split super.img
         shell: pwsh
         run: |
           if (-not (Test-Path workspace\packed\super.img)) { Write-Error "super.img not found"; exit 1 }
-          .\tools\7z.exe a -t7z -mx=5 workspace\super-${{ inputs.device }}.7z workspace\packed\super.img
+          .\tools\7z.exe a -t7z -mx=5 -v1900m workspace\super-${{ inputs.device }}.7z workspace\packed\super.img
+          if ($LASTEXITCODE -ne 0) { Write-Error "7z failed (exit $LASTEXITCODE)"; exit 1 }
 
-      - name: Upload porting output
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: XMAPort-output-${{ inputs.device }}
-          path: |
-            workspace/super-*.7z
-            workspace/*.log
-          if-no-files-found: warn
-          retention-days: 7
+      - name: Upload to Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $tag = "XMAPort-Output-${{ inputs.device }}-$(Get-Date -Format yyyyMMdd)"
+          $files = @(Get-ChildItem "workspace\super-${{ inputs.device }}.7z.*" | ForEach-Object { $_.FullName })
+          if (-not $files) { Write-Error "no split volumes found"; exit 1 }
+          if (gh release view $tag 2>$null) {
+            gh release upload $tag $files --clobber
+            gh release edit $tag --latest
+          } else {
+            gh release create $tag $files --title "XMAPort ${{ inputs.device }} $(Get-Date -Format yyyyMMdd)" --notes "移植输出（分卷 7z，每卷 <=2GB）。`n`n合并解压：`n7z x super-${{ inputs.device }}.7z.001" --latest
+          }
+          $logFiles = @(Get-ChildItem "workspace\*.log" -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName })
+          if ($logFiles) { gh release upload $tag $logFiles --clobber }
 
   build:
     if: github.event_name == 'push'
