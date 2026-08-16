@@ -71,13 +71,13 @@ jobs:
           $logFiles = @(Get-ChildItem "workspace\*.log" -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName })
           $allFiles = $volFiles + $logFiles
 
-          $romInfo = "ROM Info:`n"
+          $romInfo = @("ROM Info:")
           if (Test-Path workspace\rom_info.txt) {
             $romInfo += Get-Content workspace\rom_info.txt -Encoding UTF8 | Where-Object { $_ -match '^\S+:\s*\S+' }
           } else {
             $romInfo += "device: ${{ inputs.device }}"
           }
-          $notes = "移植输出（分卷 7z，每卷 <=2GB）。`n`n$romInfo`n`n合并解压：`n7z x super-${{ inputs.device }}.7z.001"
+          $notes = "移植输出（分卷 7z，每卷 <=2GB）。`n`n" + ($romInfo -join "`n") + "`n`n合并解压：`n7z x super-${{ inputs.device }}.7z.001"
 
           gh release create $tag $allFiles --title "XMAPort ${{ inputs.device }} $date #$n" --notes $notes --latest
 
@@ -109,4 +109,4 @@ jobs:
           $n = 1
           $tag = "XMAPort-${date}-Beta-$n"
           while (gh release view $tag 2>$null) { $n++; $tag = "XMAPort-${date}-Beta-$n" }
-          gh release create $tag XMAPort-win64.zip --title "XMAPort ${date} Beta" --notes "自动构建的 Windows 版本。`n`n用法：解压后运行 XMAPort.exe（或使用命令行参数 --auto/--device/--source/--target）。" --latest
+          gh release create $tag XMAPort-win64.zip --title "XMAPort ${date} Beta" --notes "自动构建的 Windows 版本（Python 源码包，需安装 Python 3）。`n`n用法：解压后运行 python XMAPort.py（或使用命令行参数 --auto/--device/--source/--target）。" --latest
