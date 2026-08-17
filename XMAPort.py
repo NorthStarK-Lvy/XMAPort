@@ -40,7 +40,7 @@ def init_console(auto=False):
     os.system("")
     # 设置控制台窗口标题（auto 模式下跳过）
     if not auto:
-        os.system("title XMAPort 260816.Beta")
+        os.system("title XMAPort 260817.Beta")
     # 防止非 UTF-8 终端下中文输出崩溃
     try:
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -698,13 +698,13 @@ def copy_partition_image(part, src_file, pack_cfg, lpc_args, counters):
 
 
 def create_super_img(pack_cfg, lpc_args, pack_ok):
-    # lpmake 生成 super.img
+    # lpmake 生成 super.img，返回 0=成功/跳过, 1=空间不足, 2=其他错误
     if pack_cfg.get("pack_super", "false").lower() != "true":
-        return
+        return 0
     if pack_ok == 0:
         err("No partitions packed, skipping super.img.")
         log_write("WARNING: No partitions packed, super.img skipped")
-        return
+        return 0
     info("Creating super.img...")
     cmd = [
         str(LPM),
@@ -721,18 +721,36 @@ def create_super_img(pack_cfg, lpc_args, pack_ok):
         cmd.append("--sparse")
     cmd += ["--output=" + str(PACK_OUT / "super.img")]
     info("lpmake command: " + subprocess.list2cmdline(cmd))
-    rc = subprocess.call(cmd)
+    proc = subprocess.run(cmd, capture_output=True, text=True, errors="replace")
+    rc = proc.returncode
     if rc != 0:
+        output = (proc.stdout or "") + (proc.stderr or "")
+        if output.strip():
+            print(output.strip(), flush=True)
+        lower = output.lower()
+        if any(kw in lower for kw in ["exceeds", "not enough", "no space", "too large", "overflow", "size limit"]):
+            import re
+            m = re.search(r"partition\s+(\S+)\s+with\s+size\s+(\d+)", lower)
+            if m:
+                err("lpmake failed: super space insufficient (partition={}, size={})".format(
+                    m.group(1), m.group(2)))
+                log_write("ERROR: lpmake failed - super space insufficient (partition={}, size={})".format(
+                    m.group(1), m.group(2)))
+            else:
+                err("lpmake failed: super space insufficient")
+                log_write("ERROR: lpmake failed - super space insufficient")
+            return 1
         err("lpmake failed")
         log_write("ERROR: lpmake failed to create super.img")
         pause()
-        return
+        return 2
     log_write("super.img created successfully")
     if pack_cfg.get("sparse", "true").lower() == "true":
         info("sparse super.img created directly by lpmake")
     sup = PACK_OUT / "super.img"
     if sup.exists():
         info("super.img created, {} bytes".format(sup.stat().st_size))
+    return 0
 
 
 # ---------------- 一键移植流水线 ----------------
@@ -981,9 +999,25 @@ def one_click_port(auto=False):
     if (TGT_UNPACK / "vendor_dlkm.img").exists():
         copy_partition_image("vendor_dlkm", TGT_UNPACK / "vendor_dlkm.img", pack_cfg, lpc_args, counters)
 
-    # 生成 super.img（可选）
+    # 生成 super.img（可选），空间不足时自动触发极限精简
     log_write("Creating super.img (pack_super={})".format(pack_cfg.get("pack_super", "false")))
-    create_super_img(pack_cfg, lpc_args, counters["pack_ok"])
+    super_rc = create_super_img(pack_cfg, lpc_args, counters["pack_ok"])
+    if super_rc == 1:
+        info("Triggering extreme slimming mode (make_hyper.py extreme)...")
+        log_write("Super space insufficient, running extreme slimming")
+        subprocess.call([PY, str(TOOLS / "make_hyper.py"), "extreme"])
+        info("Re-packing product partition after extreme slimming...")
+        lpc_args[:] = [a for a in lpc_args
+                        if not a.startswith("--partition=product:")
+                        and not a.startswith("--image=product=")]
+        try:
+            (PACK_OUT / "product.img").unlink()
+        except Exception:
+            pass
+        pack_one_partition("product", SRC_FS, pack_cfg, lpc_args, counters)
+        info("Retrying super.img creation...")
+        log_write("Retrying super.img after extreme slimming")
+        create_super_img(pack_cfg, lpc_args, counters["pack_ok"])
 
     # vbmeta 禁验（在 super 打包之后、汇总之前，不受 pack_super 限制）
     patch_vbmeta(pack_cfg)
