@@ -720,10 +720,12 @@ def clean_vk_props(parent_dir):
     return 0
 
 
-def clean_data_apps(parent_dir):
+def clean_data_apps(parent_dir, extreme=False):
     LOG_INFO("")
     LOG_INFO("========================================")
     LOG_INFO("  Remove preinstalled apps from data-app")
+    if extreme:
+        LOG_INFO("  *** EXTREME SLIMMING MODE ***")
     LOG_INFO("========================================")
 
     base_dir = os.path.join(parent_dir, "workspace", "source_filesystem", "product")
@@ -736,7 +738,11 @@ def clean_data_apps(parent_dir):
     LOG_INFO("Found: " + data_app_dir)
 
     targets = ["music", "video", "youpin", "newhome", "game", "duokan", "iflytek", "mishop"]
-    LOG_INFO("Target keywords: Music, Video, Youpin, Newhome, Game, Duokan, iFlytek, MiShop")
+    if extreme:
+        extra = ["home", "extraphoto", "wps", "control", "baidu"]
+        targets += extra
+        LOG_INFO("Extreme mode additional keywords: " + ", ".join(extra))
+    LOG_INFO("Target keywords: " + ", ".join(targets))
 
     removed = 0
     for name in os.listdir(data_app_dir):
@@ -1379,6 +1385,8 @@ def main():
     cmd = sys.argv[1].lower()
     if cmd == "speed":
         result = run_speed_pipeline(parent_dir)
+    elif cmd == "extreme":
+        result = clean_data_apps(parent_dir, extreme=True)
     elif cmd == "clean_apps":
         result = clean_data_apps(parent_dir)
     elif cmd == "clean_vk":
