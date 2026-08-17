@@ -14,6 +14,7 @@ XMAPort 是一个面向Xiaomi/REDMI手机的，用于移植 HyperOS (Android 15/
 
 正在测试Github Actions
 
+### 请务必调整 `device_size` 为您的super分区的正确大小，否则容易出现super空间不足而报错！
 ## 快速开始
 
 1. 确保电脑环境内有python
