@@ -17,8 +17,8 @@ from pathlib import Path
 R = "\x1b[91m"
 G = "\x1b[92m"
 Y = "\x1b[93m"
-B = "\x1b[94m"      # 蓝色（保留，未在界面使用）
-M = "\x1b[95m"      # 紫色（保留，未在界面使用）
+B = "\x1b[94m"
+M = "\x1b[95m"
 C = "\x1b[96m"
 W = "\x1b[97m"
 D = "\x1b[90m"
@@ -26,7 +26,6 @@ N = "\x1b[0m"
 BD = "\x1b[1m"
 
 # ---------------- 控制常量 ----------------
-# 调试模式：1 时打印 INFO 日志，0 时隐藏（原 bat 的 DEBUG_MODE）
 DEBUG_MODE = "1"
 
 # auto 模式标志（--auto CLI），控制是否静默外部工具实时进度输出
@@ -37,9 +36,9 @@ AUTO_MODE = False
 def init_console(auto=False):
     global AUTO_MODE
     AUTO_MODE = auto
-    # Windows 上先置空 TITLE，再启用 ANSI 虚拟终端（模拟原 bat 的 reg add）
+    # 启用 ANSI 虚拟终端
     os.system("")
-    # 设置控制台窗口标题（auto 模式下跳过，CI 无窗口）
+    # 设置控制台窗口标题（auto 模式下跳过）
     if not auto:
         os.system("title XMAPort 260816.Beta")
     # 防止非 UTF-8 终端下中文输出崩溃
@@ -48,8 +47,7 @@ def init_console(auto=False):
         sys.stderr.reconfigure(encoding="utf-8", errors="replace")
     except Exception:
         pass
-    # 让子进程脚本（pack_partitions / make_hyper / extract_img 等）同样用 UTF-8 输出，
-    # 避免 CI 英文环境 cp1252 下打印中文时 UnicodeEncodeError
+    # 子进程脚本同样用 UTF-8 输出，避免 CI cp1252 下中文崩溃
     os.environ["PYTHONIOENCODING"] = "utf-8"
 
 
@@ -66,12 +64,12 @@ if not PY:
 ARIA2 = TOOLS / "aria2c.exe"
 SZ = TOOLS / "7z.exe"
 PDUMP = TOOLS / "payload-dumper-go.exe"
-S2I = TOOLS / "simg2img.exe"        # 保留（流水线未直接调用）
-I2S = TOOLS / "img2simg.exe"        # 保留（流水线未直接调用）
-LPU = TOOLS / "lpunpack.exe"        # 保留（流水线未直接调用）
+S2I = TOOLS / "simg2img.exe"
+I2S = TOOLS / "img2simg.exe"
+LPU = TOOLS / "lpunpack.exe"
 LPM = TOOLS / "lpmake.exe"
 LPD = TOOLS / "lpdumps.exe"
-HLP = TOOLS / "img_helper.py"       # 保留（流水线未直接调用）
+HLP = TOOLS / "img_helper.py"
 
 CONFIG = ROOT / "config.ini"
 SRC_DL = WORKSPACE / "download_source"
@@ -90,13 +88,12 @@ ALL_DIRS = [
     TGT_UNPACK, OUT_DIR, SRC_FS, TGT_FS, PACK_OUT,
 ]
 
-# ---------------- 日志文件（格式与原 bat 一致：日期-小时.log） ----------------
+# ---------------- 日志文件（日期-小时.log） ----------------
 _now = datetime.now()
 LOG_FILE = WORKSPACE / "{}-{}.log".format(_now.strftime("%Y-%m-%d"), _now.hour)
 
 
 def log_write(msg):
-    # 写入运行日志文件（原 :LogWrite）
     try:
         with open(LOG_FILE, "a", encoding="utf-8") as f:
             f.write("[{}] {}\n".format(datetime.now().strftime("%H:%M:%S"), msg))
@@ -115,7 +112,7 @@ def err(msg):
 
 
 def prompt(text):
-    # 带刷新的输入提示，EOF 时优雅退出而不是抛出 Traceback
+    # EOF 时优雅退出而非抛出 Traceback
     sys.stdout.write(text)
     sys.stdout.flush()
     try:
@@ -126,7 +123,7 @@ def prompt(text):
 
 
 def pause():
-    # 对应原 bat 的 pause：等待任意键
+    # 等待任意键（非交互环境自动跳过）
     if sys.stdin and sys.stdin.isatty():
         sys.stdout.write("Please press any key to continue . . . ")
         sys.stdout.flush()
@@ -137,16 +134,15 @@ def pause():
         except Exception:
             input()
     else:
-        # 非交互环境（管道/重定向）直接跳过等待
+        # 非交互环境自动跳过
         pass
 
 
 def pause_seconds(seconds):
-    # 对应原 bat 的 timeout /t N
     time.sleep(seconds)
 
 
-# ---------------- 全局状态（对应原 bat 的 set 变量） ----------------
+# ---------------- 全局状态 ----------------
 TARGET_DEVICE = ""
 SRC_URL = ""
 TGT_URL = ""
@@ -164,7 +160,6 @@ CLI_DEVICE = ""
 
 # ---------------- [A] 工具状态检查 ----------------
 def check_tool(name, src):
-    # 单个工具检查（原 :CT）
     p = TOOLS / name
     try:
         ok = p.exists() and p.stat().st_size > 0
@@ -260,7 +255,7 @@ def clean_workspace():
     pause_seconds(2)
 
 
-# ---------------- 配置读取（对应原 :ReadConfig） ----------------
+# ---------------- 配置读取 ----------------
 def read_config():
     global SRC_URL, TGT_URL, THREADS, MAX_CONN, TIMEOUT, RETRY
     if not CONFIG.exists():
@@ -337,11 +332,11 @@ def detect_legacy_erofs_marker():
 
 
 class ReturnToMenu(Exception):
-    # 内部异常：请求返回主菜单
+    # 请求返回主菜单
     pass
 
 
-# ---------------- 打包配置读取（对应原 :ReadPackingConfig） ----------------
+# ---------------- 打包配置读取 ----------------
 def read_packing_config():
     cfg = {
         "format": "erofs",
@@ -378,7 +373,7 @@ def read_packing_config():
     return cfg
 
 
-# ---------------- 配置模板生成（对应原 :CreateConfig） ----------------
+# ---------------- 配置模板生成 ----------------
 def create_config():
     content = (
         "[source]\n"
@@ -418,7 +413,7 @@ def create_config():
     info("Created config template: {}".format(CONFIG))
 
 
-# ---------------- Step 1 下载（对应原 :DL_One） ----------------
+# ---------------- Step 1 下载 ----------------
 def dl_one(url, out_dir, name):
     os.makedirs(out_dir, exist_ok=True)
     info("Downloading: {}".format(name))
@@ -457,12 +452,11 @@ def dl_one(url, out_dir, name):
     return 0
 
 
-# ---------------- Step 2 解包（对应原 :ExtractArchive） ----------------
+# ---------------- Step 2 解包 ----------------
 def extract_archive(src_dir, out_dir, label):
     src_dir = Path(src_dir)
     os.makedirs(out_dir, exist_ok=True)
     count = 0
-    # 与原 bat 相同的扩展名顺序
     for ext in ["*.zip", "*.tar", "*.gz", "*.tgz", "*.7z", "*.rar"]:
         for f in sorted(src_dir.glob(ext)):
             count += 1
@@ -479,7 +473,7 @@ def extract_archive(src_dir, out_dir, label):
     return 0
 
 
-# ---------------- Step 3 payload 解包（对应原 :ExtractPayloadBin / :CheckPayloadExtracted） ----------------
+# ---------------- Step 3 payload 解包 ----------------
 def check_payload_extracted(target_dir):
     target_dir = Path(target_dir)
     if not target_dir.exists():
@@ -491,54 +485,76 @@ def check_payload_extracted(target_dir):
     return False
 
 
+def detect_rom_format(rom_dir):
+    """识别解压后 ROM 的格式，返回 (format, payload_path)"""
+    # 1. A/B OTA
+    for f in rom_dir.rglob("payload.bin"):
+        return "payload", f
+    # 2. block OTA（.dat / .dat.br / .dat.xz / 分卷）
+    block_patterns = ["*.transfer.list", "*.new.dat", "*.new.dat.br",
+                      "*.new.dat.xz", "*.new.dat.1"]
+    if any(True for p in block_patterns for _ in rom_dir.rglob(p)):
+        return "block_dat", None
+    # 3. 已经存在 .img
+    return "img", None
+
+
 def extract_payload_bin(rom_dir, out_dir):
     rom_dir = Path(rom_dir)
     out_dir = Path(out_dir)
     os.makedirs(out_dir, exist_ok=True)
 
-    # 递归查找 payload.bin
-    payload_file = None
-    for f in rom_dir.rglob("payload.bin"):
-        payload_file = f
-        break
+    fmt, payload_file = detect_rom_format(rom_dir)
 
-    if payload_file is None:
-        info("payload.bin not found, copying existing img files...")
-        count = 0
-        for f in rom_dir.rglob("*.img"):
-            count += 1
-            try:
-                shutil.copy2(f, out_dir / f.name)
-            except Exception:
-                pass
-        info("Copied {} img file(s)".format(count))
+    if fmt == "payload":
+        info("Found payload.bin (A/B OTA), extracting...")
+        cmd = [str(PDUMP), "-o", str(out_dir), str(payload_file)]
+        if AUTO_MODE:
+            proc = subprocess.run(cmd, stdout=subprocess.PIPE,
+                                  stderr=subprocess.STDOUT, text=True,
+                                  errors="replace")
+            rc = proc.returncode
+        else:
+            rc = subprocess.call(cmd)
+        if rc != 0:
+            err("payload-dumper-go failed")
+            if AUTO_MODE and proc.stdout:
+                tail = "\n".join(proc.stdout.strip().splitlines()[-30:])
+                print(tail, flush=True)
+                log_write(tail)
+            return 1
+        info("Payload extracted to: {}".format(out_dir))
+        for f in sorted(out_dir.glob("*.img")):
+            mb = round(f.stat().st_size / 1024 / 1024, 1)
+            info("  {}.img  {} MB".format(f.stem, mb))
         return 0
 
-    info("Found payload: {}".format(payload_file))
-    info("Extracting payload.bin...")
-    cmd = [str(PDUMP), "-o", str(out_dir), str(payload_file)]
-    if AUTO_MODE:
-        proc = subprocess.run(cmd, stdout=subprocess.PIPE,
-                              stderr=subprocess.STDOUT, text=True,
-                              errors="replace")
-        rc = proc.returncode
-    else:
-        rc = subprocess.call(cmd)
-    if rc != 0:
-        err("payload-dumper-go failed")
-        if AUTO_MODE and proc.stdout:
-            tail = "\n".join(proc.stdout.strip().splitlines()[-30:])
-            print(tail, flush=True)
-            log_write(tail)
-        return 1
-    info("Payload extracted to: {}".format(out_dir))
-    for f in sorted(out_dir.glob("*.img")):
-        mb = round(f.stat().st_size / 1024 / 1024, 1)
-        info("  {}.img  {} MB".format(f.stem, mb))
+    if fmt == "block_dat":
+        # block OTA（.dat / .dat.br / .dat.xz / 分卷）→ 转换为 .img
+        info("Found block OTA (.dat/.dat.br), converting to .img...")
+        rc = subprocess.call([PY, str(TOOLS / "extract_dat.py"),
+                              str(rom_dir), str(out_dir)])
+        if rc != 0:
+            err("block OTA .dat conversion failed")
+            log_write("ERROR: extract_dat.py failed")
+            return 1
+        info("block OTA .dat partition(s) converted to .img")
+        return 0
+
+    # fmt == "img"：没有 payload.bin 和 .dat，直接复制已有的 .img
+    info("No payload.bin / .dat found, copying existing .img files...")
+    count = 0
+    for f in rom_dir.rglob("*.img"):
+        count += 1
+        try:
+            shutil.copy2(f, out_dir / f.name)
+        except Exception:
+            pass
+    info("Copied {} img file(s)".format(count))
     return 0
 
 
-# ---------------- Step 4 镜像解包（对应原 :UnpackAllIMG） ----------------
+# ---------------- Step 4 镜像解包 ----------------
 def unpack_all_img(img_dir, out_dir, label):
     img_dir = Path(img_dir)
     out_dir = Path(out_dir)
@@ -556,7 +572,7 @@ def unpack_all_img(img_dir, out_dir, label):
     return 0
 
 
-# ---------------- Step 5 注入 adb debug（对应原 :InjectAdbDebug） ----------------
+# ---------------- Step 5 注入 adb debug ----------------
 def inject_adb_debug(pack_cfg):
     if pack_cfg.get("enable_adb_debug", "false").lower() != "true":
         return
@@ -590,7 +606,7 @@ def inject_adb_debug(pack_cfg):
     log_write("adb debug props injected: {}".format(target_prop))
 
 
-# ---------------- vbmeta 禁验（对应原 :PatchVbmeta） ----------------
+# ---------------- vbmeta 禁验 ----------------
 def patch_vbmeta(pack_cfg):
     if pack_cfg.get("patch_vbmeta", "true").lower() != "true":
         return
@@ -624,10 +640,8 @@ def patch_vbmeta(pack_cfg):
 
 # ---------------- Step 6 分区打包辅助 ----------------
 def pack_one_partition(part, fs_dir, pack_cfg, lpc_args, counters):
-    # 单个分区打包并追加 lpc_args（原 bat 内联逻辑）
     src = fs_dir / part
     if not src.exists():
-        # 原 bat：源目录不存在时静默跳过
         return
     info("Packing partition: {}".format(part))
     log_write("Packing {}...".format(part))
@@ -661,7 +675,6 @@ def pack_one_partition(part, fs_dir, pack_cfg, lpc_args, counters):
 
 def copy_partition_image(part, src_file, pack_cfg, lpc_args, counters):
     # 从 payload 镜像直接复制到 packed（mi_ext / vendor / vendor_dlkm）
-    # 原 bat 行为：失败时 pause 后继续（不返回菜单）
     if not src_file.exists():
         err("{}.img not found in payload".format(part))
         pause()
@@ -685,7 +698,7 @@ def copy_partition_image(part, src_file, pack_cfg, lpc_args, counters):
 
 
 def create_super_img(pack_cfg, lpc_args, pack_ok):
-    # lpmake 生成 super.img（对应原 bat Step 6 末尾）
+    # lpmake 生成 super.img
     if pack_cfg.get("pack_super", "false").lower() != "true":
         return
     if pack_ok == 0:
@@ -722,7 +735,7 @@ def create_super_img(pack_cfg, lpc_args, pack_ok):
         info("super.img created, {} bytes".format(sup.stat().st_size))
 
 
-# ---------------- 一键移植流水线（对应原 :OneClickPort） ----------------
+# ---------------- 一键移植流水线 ----------------
 def one_click_port(auto=False):
     global TARGET_DEVICE
 
@@ -890,13 +903,13 @@ def one_click_port(auto=False):
         except Exception:
             pass
 
-    # 传递打包环境变量给 pack_partitions.py（UTC 时间戳 / erofs 旧内核兼容 / is_skip_apex / V13 DEV 标记）
+    # 传递打包环境变量给 pack_partitions.py
     os.environ["XMAPORT_UTC_STAMP"] = str(pack_cfg.get("utc_stamp", ""))
     os.environ["XMAPORT_EROFS_LEGACY"] = str(pack_cfg.get("erofs_old_kernel", "false"))
     os.environ["XMAPORT_IS_SKIP_APEX"] = str(pack_cfg.get("is_skip_apex", "false"))
     os.environ["XMAPORT_USE_LEGACY_EROFS"] = detect_legacy_erofs_marker()
 
-    # 打包前校验分区镜像的原始文件系统格式（只警告不阻断）
+    # 打包前校验分区镜像格式（只警告不阻断）
     info("Checking original partition image formats...")
     try:
         subprocess.call([
@@ -1024,7 +1037,6 @@ def one_click_port(auto=False):
         ]:
             label = key.split(".")[-1]
             if label == "manufacturer":
-                # 原 bat 中 manufacturer 显示为 vendor
                 label = "vendor"
             for line in props_text.splitlines():
                 if "=" in line and line.split("=", 1)[0].strip() == key:
@@ -1050,7 +1062,7 @@ def one_click_port(auto=False):
 
 # ---------------- 全局崩溃报告 ----------------
 def crash_report(exc_type, exc, tb):
-    # KeyboardInterrupt 视为正常退出，不算崩溃
+    # KeyboardInterrupt 不算崩溃
     if exc_type is KeyboardInterrupt:
         print()
         sys.exit(0)
@@ -1137,12 +1149,12 @@ def main():
     global CLI_SOURCE_URL, CLI_TARGET_URL, CLI_DEVICE
     args = parse_args()
 
-    # CLI 覆盖写入全局变量
+    # CLI 覆盖
     CLI_SOURCE_URL = args.source
     CLI_TARGET_URL = args.target
     CLI_DEVICE = args.device
 
-    # 初始化控制台与目录；工作目录切换到脚本目录（与双击 bat 的行为一致）
+    # 初始化控制台与目录
     init_console(auto=args.auto)
     try:
         os.chdir(ROOT)
