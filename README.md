@@ -12,8 +12,8 @@ XMAPort 是一个面向Xiaomi/REDMI手机的，用于移植 HyperOS (Android 15/
 
 ## 功能特性
 
-支持本地+Github Actions双模式
-支持对天玑8100/8200系列进行自动Patch HWC(感谢mytiantian8181)
+- 支持本地+Github Actions双模式
+- 支持对天玑8100/8200系列进行自动Patch HWC(感谢mytiantian8181)
 
 ### 请务必调整 `device_size` 为您的super分区的正确大小，否则容易出现super空间不足而报错！
 ## 快速开始
