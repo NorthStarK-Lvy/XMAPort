@@ -15,87 +15,30 @@ g_os_version = ""
 
 
 # -----------------------------------------------------------------------------
-# Logging helpers
+# Logging helpers (ANSI escape codes, works in terminal + CI)
 # -----------------------------------------------------------------------------
-def _print_info_prefix():
-    """Print '  [INFO]  ' in green, then restore previous console color."""
-    try:
-        import ctypes
-        from ctypes import wintypes
-        kernel32 = ctypes.windll.kernel32
-        hOut = kernel32.GetStdHandle(-11)  # STD_OUTPUT_HANDLE
-        if hOut == -1:
-            sys.stdout.write("  [INFO]  ")
-            return
-        # Get current console attributes
-        class CONSOLE_SCREEN_BUFFER_INFO(ctypes.Structure):
-            _fields_ = [
-                ("dwSize", wintypes._COORD),
-                ("dwCursorPosition", wintypes._COORD),
-                ("wAttributes", wintypes.WORD),
-                ("srWindow", wintypes.SMALL_RECT),
-                ("dwMaximumWindowSize", wintypes._COORD),
-            ]
-        csbi = CONSOLE_SCREEN_BUFFER_INFO()
-        if not kernel32.GetConsoleScreenBufferInfo(hOut, ctypes.byref(csbi)):
-            sys.stdout.write("  [INFO]  ")
-            return
-        old = csbi.wAttributes
-        FOREGROUND_GREEN = 0x0002
-        FOREGROUND_INTENSITY = 0x0008
-        kernel32.SetConsoleTextAttribute(hOut, FOREGROUND_GREEN | FOREGROUND_INTENSITY)
-        sys.stdout.write("  [INFO]  ")
-        kernel32.SetConsoleTextAttribute(hOut, old)
-    except Exception:
-        sys.stdout.write("  [INFO]  ")
+_G = "\033[92m"   # green
+_R = "\033[91m"   # red
+_Y = "\033[93m"   # yellow
+_D = "\033[90m"   # gray
+_B = "\033[94m"   # blue
+_N = "\033[0m"    # reset
 
 
 def LOG_INFO(msg):
-    _print_info_prefix()
-    print(msg)
+    print("  " + _G + "[INFO]" + _N + "  " + str(msg))
 
 
 def LOG_ERROR(msg):
-    print("[ERROR] " + str(msg), file=sys.stderr)
+    print("  " + _R + "[ERROR]" + _N + " " + str(msg), file=sys.stderr)
 
 
 def LOG_DEBUG(msg):
-    print("[DEBUG] " + str(msg))
+    print("  " + _D + "[DEBUG]" + _N + " " + str(msg))
 
 
 def _log_info_blue(msg):
-    """Print '  [INFO]  <msg>' with the prefix in green and the message in blue."""
-    try:
-        import ctypes
-        from ctypes import wintypes
-        kernel32 = ctypes.windll.kernel32
-        hOut = kernel32.GetStdHandle(-11)
-        if hOut == -1:
-            print("  [INFO]  " + msg)
-            return
-        class CONSOLE_SCREEN_BUFFER_INFO(ctypes.Structure):
-            _fields_ = [
-                ("dwSize", wintypes._COORD),
-                ("dwCursorPosition", wintypes._COORD),
-                ("wAttributes", wintypes.WORD),
-                ("srWindow", wintypes.SMALL_RECT),
-                ("dwMaximumWindowSize", wintypes._COORD),
-            ]
-        csbi = CONSOLE_SCREEN_BUFFER_INFO()
-        if not kernel32.GetConsoleScreenBufferInfo(hOut, ctypes.byref(csbi)):
-            print("  [INFO]  " + msg)
-            return
-        old = csbi.wAttributes
-        FOREGROUND_BLUE = 0x0001
-        FOREGROUND_GREEN = 0x0002
-        FOREGROUND_INTENSITY = 0x0008
-        kernel32.SetConsoleTextAttribute(hOut, FOREGROUND_GREEN | FOREGROUND_INTENSITY)
-        sys.stdout.write("  [INFO]  ")
-        kernel32.SetConsoleTextAttribute(hOut, FOREGROUND_BLUE | FOREGROUND_INTENSITY)
-        sys.stdout.write(msg + "\n")
-        kernel32.SetConsoleTextAttribute(hOut, old)
-    except Exception:
-        print("  [INFO]  " + msg)
+    print("  " + _G + "[INFO]" + _N + "  " + _B + str(msg) + _N)
 
 
 # -----------------------------------------------------------------------------
@@ -348,7 +291,10 @@ def detect_os_version(parent_dir):
 # Pipeline steps
 # -----------------------------------------------------------------------------
 def sync_features(parent_dir):
-    LOG_INFO("Starting device_features synchronization...")
+    LOG_INFO("")
+    LOG_INFO("========================================")
+    LOG_INFO("  Synchronize device_features")
+    LOG_INFO("========================================")
 
     config_path = os.path.join(parent_dir, "workspace", "config.txt")
     LOG_INFO("Reading config: " + config_path)
@@ -392,6 +338,7 @@ def sync_features(parent_dir):
         LOG_INFO("  Rename: " + src + " -> " + dest_path)
         if move_file_overwrite(src, dest_path):
             LOG_INFO("device_features synchronization completed.")
+            LOG_INFO("========================================")
             return 0
         else:
             LOG_ERROR("  Rename failed.")
@@ -402,6 +349,11 @@ def sync_features(parent_dir):
 
 
 def clean_miui_booster(parent_dir):
+    LOG_INFO("")
+    LOG_INFO("========================================")
+    LOG_INFO("  Clean MiuiBooster (DeviceLevelUtils/LiteUtils)")
+    LOG_INFO("========================================")
+
     lower_osv = g_os_version.lower()
     is_os4 = (lower_osv == "4" or lower_osv == "4.0" or lower_osv == "os4.0"
               or lower_osv.startswith("os4"))
@@ -521,11 +473,15 @@ def clean_miui_booster(parent_dir):
         return 1
     LOG_INFO("MiuiBooster.jar cleaned and installed successfully.")
     LOG_INFO("Original backup: " + backup_path)
+    LOG_INFO("========================================")
     return 0
 
 
 def sync_apex(parent_dir):
-    LOG_INFO("Starting VNDK apex synchronization...")
+    LOG_INFO("")
+    LOG_INFO("========================================")
+    LOG_INFO("  Synchronize VNDK apex + vintf")
+    LOG_INFO("========================================")
 
     source_root = os.path.join(parent_dir, "workspace", "source_filesystem")
     target_root = os.path.join(parent_dir, "workspace", "target_filesystem")
@@ -661,11 +617,15 @@ def sync_apex(parent_dir):
         return 1
 
     LOG_INFO("VNDK apex sync done. <vendor-ndk> blocks appended: " + int_to_str(appended) + ". Backup: " + backup_path)
+    LOG_INFO("========================================")
     return 0
 
 
 def clean_vk_props(parent_dir):
-    LOG_INFO("Starting vk prop cleanup...")
+    LOG_INFO("")
+    LOG_INFO("========================================")
+    LOG_INFO("  Remove vk props from product build.prop")
+    LOG_INFO("========================================")
 
     prop_path = os.path.join(parent_dir, "workspace", "source_filesystem", "product", "etc", "build.prop")
     if not os.path.exists(prop_path):
@@ -717,6 +677,7 @@ def clean_vk_props(parent_dir):
         return 1
 
     LOG_INFO("Removed " + int_to_str(removed) + " vk prop(s). Backup: " + backup_path)
+    LOG_INFO("========================================")
     return 0
 
 
@@ -764,7 +725,10 @@ def clean_data_apps(parent_dir, extreme=False):
 
 
 def patch_build_prop(parent_dir):
-    LOG_INFO("Starting build.prop patch...")
+    LOG_INFO("")
+    LOG_INFO("========================================")
+    LOG_INFO("  Patch build prop from config.ini")
+    LOG_INFO("========================================")
 
     ini_path = os.path.join(parent_dir, "config.ini")
     target_prop = os.path.join(parent_dir, "workspace", "target_filesystem", "odm", "etc", "build.prop")
@@ -835,6 +799,7 @@ def patch_build_prop(parent_dir):
         return 1
 
     LOG_INFO("Appended " + int_to_str(len(patch_lines) + extra) + " line(s) to target build.prop.")
+    LOG_INFO("========================================")
     return 0
 
 
@@ -867,7 +832,10 @@ def replace_int_attr_value(line, attr_name, new_value):
 
 
 def sync_fps_list(parent_dir):
-    LOG_INFO("Starting fpsList / smart_fps_value synchronization...")
+    LOG_INFO("")
+    LOG_INFO("========================================")
+    LOG_INFO("  Synchronize fpsList + smart_fps_value")
+    LOG_INFO("========================================")
 
     target_name = ""
     config_path = os.path.join(parent_dir, "workspace", "config.txt")
@@ -1029,11 +997,15 @@ def sync_fps_list(parent_dir):
         return 1
 
     LOG_INFO("fpsList synchronized in " + source_xml + " (fpsList items: " + int_to_str(len(target_items)) + ", smart_fps_value replaced: " + int_to_str(replaced_smart) + "). Backup: " + backup_path)
+    LOG_INFO("========================================")
     return 0
 
 
 def sync_display_config(parent_dir):
-    LOG_INFO("Starting display_id config synchronization...")
+    LOG_INFO("")
+    LOG_INFO("========================================")
+    LOG_INFO("  Synchronize display_id configs")
+    LOG_INFO("========================================")
 
     source_dir = os.path.join(parent_dir, "workspace", "source_filesystem", "product", "etc", "displayconfig")
     target_dir = os.path.join(parent_dir, "workspace", "target_filesystem", "product", "etc", "displayconfig")
@@ -1119,11 +1091,15 @@ def sync_display_config(parent_dir):
             LOG_ERROR("  Rename failed: " + stage_files[i] + " -> " + dest)
 
     LOG_INFO("display_id sync done. Renamed: " + int_to_str(renamed) + ", duplicated: " + int_to_str(duplicated) + ".")
+    LOG_INFO("========================================")
     return 0
 
 
 def sync_miui_camera(parent_dir):
-    LOG_INFO("Starting MiuiCamera migration...")
+    LOG_INFO("")
+    LOG_INFO("========================================")
+    LOG_INFO("  Migrate MiuiCamera + TURN_SCREEN_ON perm")
+    LOG_INFO("========================================")
 
     source_product = os.path.join(parent_dir, "workspace", "source_filesystem", "product")
     target_product = os.path.join(parent_dir, "workspace", "target_filesystem", "product")
@@ -1214,6 +1190,7 @@ def sync_miui_camera(parent_dir):
         return 1
 
     LOG_INFO("TURN_SCREEN_ON permission inserted (" + int_to_str(inserted) + " time(s)). Backup: " + backup_path)
+    LOG_INFO("========================================")
     return 0
 
 
@@ -1325,9 +1302,113 @@ def fix_face_unlock(parent_dir):
 
 
 # -----------------------------------------------------------------------------
+# Patch SurfaceFlinger for MTK devices (Android 16 / OS 3.0.x)
+# Only runs when device_platform=MTK in config.ini; skipped on Qualcomm.
+# See: sf修复文档.md
+# -----------------------------------------------------------------------------
+def patch_surfaceflinger(parent_dir):
+    LOG_INFO("")
+    LOG_INFO("========================================")
+    LOG_INFO("  Patch SurfaceFlinger (MTK only)")
+    LOG_INFO("========================================")
+
+    device_platform = get_device_platform(parent_dir)
+    if device_platform.lower() != "mtk":
+        LOG_INFO("device_platform=" + device_platform + ", skipping SurfaceFlinger patch.")
+        return 0
+
+    search_root = os.path.join(parent_dir, "workspace", "source_filesystem", "system_ext", "lib64")
+    if not os.path.isdir(search_root):
+        LOG_INFO("system_ext/lib64 directory not found: " + search_root)
+        return 0
+
+    candidates = []
+    for root, dirs, files in os.walk(search_root):
+        for name in files:
+            if name.lower() == "libsurfaceflinger.so":
+                candidates.append(os.path.join(root, name))
+
+    if not candidates:
+        LOG_INFO("No libsurfaceflinger.so found under " + search_root + ", skipping.")
+        return 0
+
+    if len(candidates) > 1:
+        LOG_ERROR("Multiple libsurfaceflinger.so found, cannot determine target:")
+        for c in candidates:
+            LOG_ERROR("  " + c)
+        return 1
+
+    target = candidates[0]
+    LOG_INFO("Target: " + target)
+
+    exe_dir = get_exe_directory()
+    patcher = os.path.join(exe_dir, "patch_sf.py")
+    if not os.path.isfile(patcher):
+        LOG_ERROR("patch_sf.py not found: " + patcher)
+        return 1
+
+    cmd = [sys.executable, patcher, target]
+    LOG_INFO("Running: " + subprocess.list2cmdline(cmd))
+    env = dict(os.environ)
+    env["PYTHONIOENCODING"] = "utf-8"
+    try:
+        proc = subprocess.run(cmd, capture_output=True, encoding="utf-8", errors="replace", env=env)
+    except Exception as e:
+        LOG_ERROR("Failed to run patch_sf.py: " + str(e))
+        return 1
+
+    # patch_sf.py outputs Chinese; save full UTF-8 output to log, print English summary only
+    out = proc.stdout or ""
+    log_path = os.path.join(parent_dir, "workspace", "sf_patch.log")
+    try:
+        with open(log_path, "w", encoding="utf-8") as lf:
+            lf.write(out)
+            if proc.stderr:
+                lf.write("\n--- stderr ---\n")
+                lf.write(proc.stderr)
+    except Exception:
+        pass
+
+    if proc.returncode != 0:
+        LOG_ERROR("patch_sf.py failed (exit " + int_to_str(proc.returncode) + "), see: " + log_path)
+        LOG_INFO("========================================")
+        return 1
+
+    if "已是补丁状态" in out:
+        LOG_INFO("SurfaceFlinger already patched, skipping.")
+    else:
+        LOG_INFO("SurfaceFlinger patched successfully.")
+    LOG_INFO("Details: " + log_path)
+    LOG_INFO("========================================")
+    return 0
+
+
+# -----------------------------------------------------------------------------
 # Pipeline and main
 # -----------------------------------------------------------------------------
 StepFunc = type("StepFunc", (), {})
+
+
+def get_device_platform(parent_dir):
+    """Read device_platform from config.ini, default to qualcomm."""
+    ini_path = os.path.join(parent_dir, "config.ini")
+    try:
+        with open(ini_path, "rb") as f:
+            raw = f.read()
+        if raw.startswith(b"\xef\xbb\xbf"):
+            raw = raw[3:]
+        text = raw.decode("gbk", errors="ignore")
+        for line in text.splitlines():
+            line = line.strip()
+            if not line or line.startswith(";") or line.startswith("["):
+                continue
+            if "=" in line:
+                k, v = line.split("=", 1)
+                if k.strip().lower() == "device_platform":
+                    return v.strip()
+    except Exception:
+        pass
+    return "qualcomm"
 
 
 def run_speed_pipeline(parent_dir):
@@ -1342,10 +1423,13 @@ def run_speed_pipeline(parent_dir):
         ("Synchronize fpsList + smart_fps_value", sync_fps_list),
         ("Synchronize display_id configs", sync_display_config),
         ("Migrate MiuiCamera + TURN_SCREEN_ON perm", sync_miui_camera),
+        ("Patch SurfaceFlinger (MTK only)", patch_surfaceflinger),
     ]
     step_count = len(steps)
 
-    LOG_INFO("HyperOS port mode for Qualcomm started.")
+    device_platform = get_device_platform(parent_dir)
+    platform_label = {"mtk": "MTK", "qualcomm": "Qualcomm"}.get(device_platform.lower(), device_platform.title())
+    LOG_INFO("HyperOS port mode for " + platform_label + " started.")
 
     results = [0] * step_count
     failed = 0
@@ -1359,7 +1443,7 @@ def run_speed_pipeline(parent_dir):
         time.sleep(1.0)
 
     LOG_INFO("")
-    LOG_INFO("========== port mode for Qualcomm summary ==========")
+    LOG_INFO("========== port mode for " + platform_label + " summary ==========")
     for i in range(step_count):
         status = "[OK]  " if results[i] == 0 else "[FAIL]"
         LOG_INFO(status + " " + steps[i][0])
