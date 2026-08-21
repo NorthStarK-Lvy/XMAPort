@@ -1,298 +1,355 @@
-# pylint: disable=line-too-long
-# Copyright (C) 2022-2025 The Android Kitchen Project
-#
-# Licensed under the GNU AFFERO GENERAL PUBLIC LICENSE, Version 3.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#      https://www.gnu.org/licenses/agpl-3.0.en.html#license-text
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-import logging
+"""Pure-Python ext4 image extractor.
+
+Extracts an ext4 image into a directory tree while generating the metadata
+files expected by the repack pipeline:
+
+  work/config/{name}_fs_config
+  work/config/{name}_file_contexts
+  work/config/{name}_size.txt
+  work/config/{name}_space.txt
+
+Sparse images are first converted in-place by img_init.simg2img.
+MOTOROLA-style wrapped images are detected and fixed before extraction.
+"""
 import os
 import re
 import struct
-from .posix import symlink
 from timeit import default_timer as dti
+
 from . import ext4
 from .img_init import simg2img
+from .posix import symlink
+
+_EXT4_SUPER_MAGIC = b'\x53\xef'
+_MOTO_PROBE_SIZE = 500_000
+_MOTO_READ_SIZE = 15360
+
+
+def _mode_to_octal(mode_str: str) -> str:
+    """Convert ls -l style permission string to an octal mode string."""
+    if len(mode_str) >= 10 and mode_str[0] in '-dlcbps':
+        mode_str = mode_str[1:]
+    if len(mode_str) != 9:
+        return '000'
+
+    def _triplet(r, w, x):
+        v = 0
+        if r == 'r':
+            v += 4
+        if w == 'w':
+            v += 2
+        if x in 'xXsStT':
+            v += 1
+        return v
+
+    owner = _triplet(mode_str[0], mode_str[1], mode_str[2])
+    group = _triplet(mode_str[3], mode_str[4], mode_str[5])
+    other = _triplet(mode_str[6], mode_str[7], mode_str[8])
+
+    special = 0
+    if mode_str[2] in 'sS':
+        special += 4
+    if mode_str[5] in 'sS':
+        special += 2
+    if mode_str[8] in 'tT':
+        special += 1
+
+    if special:
+        return f'{special}{owner}{group}{other}'
+    return f'{owner}{group}{other}'
+
+
+def _write_text(text: str, path: str) -> None:
+    """Write text to file, creating parent directories if needed."""
+    parent = os.path.dirname(path)
+    if parent and not os.path.isdir(parent):
+        os.makedirs(parent, exist_ok=True)
+    with open(path, 'w', newline='\n', encoding='utf-8') as f:
+        f.write(str(text).strip() + '\n')
+
+
+def _read_symlink_target(inode):
+    """Read the target of an ext4 symlink inode."""
+    try:
+        raw = inode.open_read().read()
+        if raw:
+            return raw.decode('utf-8')
+    except (OSError, UnicodeDecodeError):
+        pass
+    return ''
 
 
 class Extractor:
     def __init__(self):
         self.CONFIG_DIR = None
-        self.FileName = ""
-        self.OUTPUT_IMAGE_FILE = ""
-        self.EXTRACT_DIR = ""
+        self.FileName = ''
+        self.OUTPUT_IMAGE_FILE = ''
+        self.EXTRACT_DIR = ''
         self.context = []
         self.fs_config = []
         self.space = []
         self.error_times = 0
 
     @staticmethod
-    def __out_name(file_path, out=1):
+    def _out_name(file_path: str, out: int = 1) -> str:
+        """Derive a clean partition/file name from a path.
+
+        Splits on '-', ' ', '+', '{', '(' and returns the first part,
+        matching the historical naming convention.
+        """
         name = file_path if out == 1 else os.path.basename(file_path).rsplit('.', 1)[0]
-        return name.split('-')[0].split(' ')[0].split('+')[0].split('{')[0].split('(')[0]
+        for sep in ('-', ' ', '+', '{', '('):
+            name = name.split(sep)[0]
+        return name
 
     @staticmethod
-    def __write(msg, log):
-        if not os.path.isfile(log) and not os.path.exists(log):
-            open(log, 'tw', encoding='utf-8').close()
-        with open(log, 'w', newline='\n', encoding='utf-8') as file:
-            print(str(msg).strip(), file=file)
-
-    @staticmethod
-    def __get_perm(arg):
-        if len(arg) < 9 or len(arg) > 10:
+    def _parse_capabilities(value: bytes) -> str:
+        """Parse a Linux security.capability xattr to a fs_config fragment."""
+        if len(value) != 20:
             return ''
-        if len(arg) > 8:
-            arg = arg[1:]
-        o = s = w = g = 0
-        perms = {
-            'r': 4,
-            'w': 2,
-            'x': 1
-        }
-        for n, sym in enumerate(arg):
-            if n == 0 and perms.get(sym):
-                o = perms.get(sym)
-            elif n == 1 and perms.get(sym):
-                o += perms.get(sym)
-            elif n == 2:
-                if sym == 'S':
-                    s = 4
-                elif perms.get(sym):
-                    o += perms.get(sym)
-                elif sym == 's':
-                    s += 4
-                    o += 1
-            elif n == 3 and perms.get(sym):
-                g = perms.get(sym)
-            elif n == 4 and perms.get(sym):
-                g += perms.get(sym)
-            if n == 5:
-                if perms.get(sym):
-                    g += perms.get(sym)
-                elif sym == 'S':
-                    s += 2
-                elif sym == 's':
-                    s += 2
-                    g += 1
-            elif n == 6 and perms.get(sym):
-                w = perms.get(sym)
-            elif n == 7 and perms.get(sym):
-                w += perms.get(sym)
-            elif n == 8:
-                if perms.get(sym):
-                    w += perms.get(sym)
-                elif sym == 'T':
-                    s += 1
-                elif sym == 't':
-                    s += 1
-                    w += 1
-        return f'{s}{o}{g}{w}'
+        try:
+            r = struct.unpack('<5I', value)
+        except struct.error:
+            return ''
+        # Preserve the legacy combined-capability encoding for compatibility
+        # with existing Android build tooling.
+        if r[1] > 65535:
+            cap = hex((r[3] << 16) | r[1])
+        else:
+            cap = hex((r[3] << 32) | (r[2] << 16) | r[1])
+        return f' capabilities={cap}'
 
-    def scan_dir(self, root_inode, root_path=""):
+    def _scan_dir(self, root_inode, root_path: str = '') -> None:
+        """Recursively extract an ext4 directory inode."""
         for entry_name, entry_inode_idx, entry_type in root_inode.open_dir():
-            if entry_name in ['.', '..'] or entry_name.endswith(' (2)'):
+            if entry_name in ('.', '..') or entry_name.endswith(' (2)'):
                 continue
             if self.error_times >= 200:
-                print("Some thing wrong,Stop!")
+                print('  [W] Too many errors, stopping extraction.')
                 break
+
             entry_inode = root_inode.volume.get_inode(entry_inode_idx, entry_type)
-            entry_inode_path = root_path + '/' + entry_name
-            if entry_inode_path[-1:] == '/' and not entry_inode.is_dir:
+            entry_path = root_path + '/' + entry_name
+
+            # Windows forbids ':' in filenames.
+            if os.name == 'nt' and ':' in entry_path:
+                print("  [W] ':' not allowed in Windows paths, replacing with '_'")
+                entry_path = entry_path.replace(':', '_')
+
+            # Inconsistent directory entry sanity check.
+            if entry_path.endswith('/') and not entry_inode.is_dir:
                 self.error_times += 1
                 continue
 
-            mode = self.__get_perm(entry_inode.mode_str)
+            mode = _mode_to_octal(entry_inode.mode_str)
             uid = entry_inode.inode.i_uid
             gid = entry_inode.inode.i_gid
             cap = ''
             link_target = ''
-            tmp_path = self.FileName + entry_inode_path
-            for f, e in entry_inode.xattrs():
-                if f == 'security.selinux':
-                    t_p_mkc = tmp_path
-                    for fuk_ in '\\^$.|?*+(){}[]':
-                        t_p_mkc = t_p_mkc.replace(fuk_, f'\\{fuk_}')
-                    self.context.append(f"/{t_p_mkc} {e.decode('utf8')[:-1]}")
-                elif f == 'security.capability':
-                    r = struct.unpack('<5I', e)
-                    if r[1] > 65535:
-                        cap = hex(int(f'{r[3]:04x}{r[1]:04x}', 16))
-                    else:
-                        cap = hex(int(f'{r[3]:04x}{r[2]:04x}{r[1]:04x}', 16))
-                    cap = f" capabilities={cap}"
+
+            for attr_name, attr_value in entry_inode.xattrs():
+                if attr_name == 'security.selinux':
+                    label = attr_value.decode('utf-8').rstrip('\x00')
+                    escaped_path = re.escape(entry_path)
+                    self.context.append(f'/{self.FileName}{escaped_path} {label}')
+                elif attr_name == 'security.capability':
+                    cap = self._parse_capabilities(attr_value)
+
             if entry_inode.is_symlink:
-                try:
-                    link_target = entry_inode.open_read().read().decode("utf8")
-                except Exception and BaseException:
-                    link_target_block = int.from_bytes(entry_inode.open_read().read(), "little")
-                    link_target = root_inode.volume.read(link_target_block * root_inode.volume.block_size,
-                                                         entry_inode.inode.i_size).decode("utf8")
-            if tmp_path.find(' ', 1, len(tmp_path)) > 0:
-                self.space.append(tmp_path)
-                self.fs_config.append(
-                    f"{tmp_path.replace(' ', '_')} {uid} {gid} {mode}{cap} {link_target}")
-            else:
-                self.fs_config.append(
-                    f'{tmp_path} {uid} {gid} {mode}{cap} {link_target}')
+                link_target = _read_symlink_target(entry_inode)
+
+            fs_path = self.FileName + entry_path
+            if ' ' in fs_path[1:]:
+                self.space.append(fs_path)
+                fs_path = fs_path.replace(' ', '_')
+
+            self.fs_config.append(
+                f'{fs_path} {uid} {gid} {mode}{cap} {link_target}'.rstrip())
+
             if entry_inode.is_dir:
-                if os.name == 'nt' and ":" in entry_inode_path:
-                    print("[NTWarning] The <:> not allow in path, will replace <:> to <_>.")
-                    entry_inode_path = entry_inode_path.replace(":", "_")
-                dir_target = self.EXTRACT_DIR + entry_inode_path.replace(' ', '_').replace('"', '')
+                dir_target = self.EXTRACT_DIR + entry_path.replace(' ', '_').replace('"', '')
                 if dir_target.endswith('.') and os.name == 'nt':
                     dir_target = dir_target[:-1]
-                if not os.path.isdir(dir_target):
-                    os.makedirs(dir_target)
+                os.makedirs(dir_target, exist_ok=True)
                 if os.name == 'posix' and os.geteuid() == 0:
                     os.chmod(dir_target, int(mode, 8))
                     os.chown(dir_target, uid, gid)
-                self.scan_dir(entry_inode, entry_inode_path)
+                self._scan_dir(entry_inode, entry_path)
             elif entry_inode.is_file:
-                file_target = self.EXTRACT_DIR + entry_inode_path.replace(' ', '_').replace('"', '')
-                file_target_dirname = os.path.dirname(file_target)
-                if not os.path.exists(file_target_dirname):
-                    os.makedirs(file_target_dirname, exist_ok=True)
-                try:
-                    with open(file_target, 'wb') as out:
-                        out.write(entry_inode.open_read().read())
-                except Exception and BaseException as e:
-                    logging.exception('Ext4Extractor')
-                    print(f'[E] Cannot Write to {file_target}, Reason: {e}')
+                file_target = self.EXTRACT_DIR + entry_path.replace(' ', '_').replace('"', '')
+                file_target_dir = os.path.dirname(file_target)
+                if file_target_dir and not os.path.isdir(file_target_dir):
+                    os.makedirs(file_target_dir, exist_ok=True)
+                with open(file_target, 'wb') as out:
+                    out.write(entry_inode.open_read().read())
                 if os.name == 'posix' and os.geteuid() == 0:
                     os.chmod(file_target, int(mode, 8))
                     os.chown(file_target, uid, gid)
             elif entry_inode.is_symlink:
-                target = self.EXTRACT_DIR + entry_inode_path.replace(' ', '_')
-                try:
-                    if os.path.islink(target) or os.path.isfile(target):
-                        try:
-                            os.remove(target)
-                        finally:
-                            ...
-                    symlink(link_target, target)
-                except BaseException and Exception:
+                target = self.EXTRACT_DIR + entry_path.replace(' ', '_')
+                if os.path.exists(target) or os.path.islink(target):
                     try:
-                        if link_target and link_target.isprintable():
-                            symlink(link_target, target)
-                    finally:
-                        ...
+                        os.remove(target)
+                    except OSError:
+                        pass
+                symlink(link_target, target)
 
-    def __ext4extractor(self):
-        if not os.path.isdir(self.CONFIG_DIR):
-            os.makedirs(self.CONFIG_DIR)
-        self.__write(os.path.getsize(self.OUTPUT_IMAGE_FILE), self.CONFIG_DIR + os.sep + self.FileName + '_size.txt')
-        with open(self.OUTPUT_IMAGE_FILE, 'rb') as file:
-            dir_r = self.FileName
-            self.scan_dir(ext4.Volume(file).root)
-            self.fs_config.insert(0, '/ 0 2000 0755' if dir_r == 'vendor' else '/ 0 0 0755')
-            self.fs_config.insert(1, f'{dir_r} 0 2000 0755' if dir_r == 'vendor' else '/lost+found 0 0 0700')
-            self.fs_config.insert(2 if dir_r == 'system' else 1, f'{dir_r} 0 0 0755')
-            self.__write('\n'.join(self.fs_config), self.CONFIG_DIR + os.sep + self.FileName + '_fs_config')
-            if self.space:
-                self.__write('\n'.join(self.space), os.path.join(self.CONFIG_DIR, self.FileName + '_space.txt'))
-            p1 = p2 = 0
-            if self.context:
-                self.context.sort()
-                for c in self.context:
-                    if re.search('/system/system/build..prop ', c) and p1 == 0:
-                        self.context.insert(3, '/lost+\\found u:object_r:rootfs:s0')
-                        self.context.insert(4, f'/{dir_r}/{dir_r}/(/.*)? {c.split()[1]}')
-                        p1 = 1
-                    if re.search('lost..found', c) and p2 == 0:
-                        self.context.insert(0, f'/ {c.split()[1]}')
-                        self.context.insert(1, f'/{dir_r}(/.*)? {c.split()[1]}')
-                        self.context.insert(2, f'/{dir_r} {c.split()[1]}')
-                        self.context.insert(3, f'/{dir_r}/lost+\\found {c.split()[1]}')
-                        p2 = 1
-                    if p1 == p2 == 1:
-                        break
-                self.__write('\n'.join(self.context), self.CONFIG_DIR + os.sep + self.FileName + "_file_contexts")
+    def _extract(self) -> None:
+        """Extract the image and write fs_config / file_contexts metadata."""
+        os.makedirs(self.CONFIG_DIR, exist_ok=True)
+        _write_text(
+            os.path.getsize(self.OUTPUT_IMAGE_FILE),
+            os.path.join(self.CONFIG_DIR, f'{self.FileName}_size.txt'))
+
+        with open(self.OUTPUT_IMAGE_FILE, 'rb') as f:
+            self._scan_dir(ext4.Volume(f).root)
+
+        self._insert_root_entries()
+        self._write_configs()
+
+    def _insert_root_entries(self) -> None:
+        """Add mandatory root / lost+found / partition-root fs_config lines."""
+        name = self.FileName
+        # /
+        self.fs_config.insert(
+            0, '/ 0 2000 0755' if name == 'vendor' else '/ 0 0 0755')
+
+        # lost+found or vendor special entry
+        if name == 'vendor':
+            self.fs_config.insert(1, f'{name} 0 2000 0755')
+        else:
+            self.fs_config.insert(1, '/lost+found 0 0 0700')
+
+        # partition root
+        insert_at = 2 if name == 'system' else 1
+        self.fs_config.insert(insert_at, f'{name} 0 0 0755')
+
+    def _write_configs(self) -> None:
+        """Persist generated config files."""
+        _write_text(
+            '\n'.join(self.fs_config),
+            os.path.join(self.CONFIG_DIR, f'{self.FileName}_fs_config'))
+        if self.space:
+            _write_text(
+                '\n'.join(self.space),
+                os.path.join(self.CONFIG_DIR, f'{self.FileName}_space.txt'))
+        if self.context:
+            self._insert_context_roots()
+            self.context.sort()
+            _write_text(
+                '\n'.join(self.context),
+                os.path.join(self.CONFIG_DIR, f'{self.FileName}_file_contexts'))
+
+    def _insert_context_roots(self) -> None:
+        """Add root-level file_contexts rules from a representative label."""
+        label = None
+        for line in self.context:
+            if 'build.prop' in line or '/lost+found' in line:
+                label = line.split(maxsplit=1)[1]
+                break
+        if not label:
+            return
+        name = self.FileName
+        self.context.insert(0, f'/ {label}')
+        self.context.insert(1, f'/{name}(/.*)? {label}')
+        self.context.insert(2, f'/{name} {label}')
+        self.context.insert(3, f'/{name}/lost+\\found {label}')
 
     @staticmethod
-    def fix_moto(input_file):
-        if not os.path.exists(input_file):
+    def fix_moto(input_file: str) -> None:
+        """Strip a Motorola wrapper header to expose the embedded ext4 image."""
+        if not os.path.isfile(input_file):
             return
-        output_file = input_file + "_"
+        output_file = input_file + '_'
         if os.path.exists(output_file):
             try:
                 os.remove(output_file)
-            finally:
+            except OSError:
                 pass
+
         with open(input_file, 'rb') as f:
-            data = f.read(500000)
-        if not re.search(b'\x4d\x4f\x54\x4f', data):
+            data = f.read(_MOTO_PROBE_SIZE)
+        if b'MOTO' not in data:
             return
-        result = []
-        for i in re.finditer(b'\x53\xEF', data):
-            result.append(i.start() - 1080)
-        offset = 0
-        for i in result:
-            if data[i] == 0:
-                offset = i
-                break
-        if offset > 0:
-            with open(output_file, 'wb') as o, open(input_file, 'rb') as f:
-                f.seek(offset)
-                data = f.read(15360)
-                if data:
-                    o.write(data)
+
+        offsets = []
+        for m in re.finditer(_EXT4_SUPER_MAGIC, data):
+            pos = m.start() - 1080
+            if 0 <= pos < len(data) and data[pos] == 0:
+                offsets.append(pos)
+        if not offsets:
+            return
+
+        with open(input_file, 'rb') as f, open(output_file, 'wb') as o:
+            f.seek(offsets[0])
+            chunk = f.read(_MOTO_READ_SIZE)
+            if chunk:
+                o.write(chunk)
+
         if os.path.exists(output_file):
             try:
                 os.remove(input_file)
                 os.rename(output_file, input_file)
-            finally:
+            except OSError:
                 pass
 
-    def fix_size(self):
+    def fix_size(self) -> None:
+        """Expand a truncated image to the size declared by its ext4 superblock."""
         orig_size = os.path.getsize(self.OUTPUT_IMAGE_FILE)
-        with open(self.OUTPUT_IMAGE_FILE, 'rb+') as file:
-            t = ext4.Volume(file)
-            real_size = t.get_block_count * t.block_size
+        with open(self.OUTPUT_IMAGE_FILE, 'rb+') as f:
+            volume = ext4.Volume(f)
+            real_size = volume.get_block_count * volume.block_size
             if orig_size < real_size:
                 print(
-                    f"......Your image is smaller than expected! Expanding the file.......\n"
-                    f"Expected:{real_size}\nGot:{orig_size}")
-                file.truncate(real_size)
+                    f'  [W] Image smaller than expected, '
+                    f'expanding {orig_size} -> {real_size}')
+                f.truncate(real_size)
 
-    def main(self, target: str, output_dir: str, work: str, target_type: str = 'img'):
-        self.EXTRACT_DIR = os.path.realpath(os.path.dirname(output_dir)) + os.sep + self.__out_name(
-            os.path.basename(output_dir))
-        self.OUTPUT_IMAGE_FILE = (os.path.realpath(os.path.dirname(target)) + os.sep) + os.path.basename(target)
-        self.FileName = self.__out_name(os.path.basename(target), out=0)
-        self.CONFIG_DIR = work + os.sep + 'config'
-        with open(self.OUTPUT_IMAGE_FILE, 'rb+') as file:
-            mount = ext4.Volume(file).get_mount_point
-            if mount[:1] == '/':
-                mount = mount[1:]
-            if '/' in mount:
-                mount = mount.split('/')
-                mount = mount[len(mount) - 1]
-            if [True for i in [".", "@", "#"] if i in mount]:
-                mount = ""
-            if self.__out_name(os.path.basename(output_dir)) != mount and mount and self.FileName != 'mi_ext':
-                print(
-                    f"[N]:Filename appears to be wrong , We will Extract {self.OUTPUT_IMAGE_FILE} to {mount}")
-                self.EXTRACT_DIR = os.path.realpath(os.path.dirname(output_dir)) + os.sep + mount
-                self.FileName = mount
+    def main(self, target: str, output_dir: str, work: str, target_type: str = 'img') -> None:
+        """Extract an ext4/sparse image to output_dir with config in work/config."""
+        self.EXTRACT_DIR = (
+            os.path.realpath(os.path.dirname(output_dir))
+            + os.sep + self._out_name(os.path.basename(output_dir)))
+        self.OUTPUT_IMAGE_FILE = (
+            os.path.realpath(os.path.dirname(target))
+            + os.sep + os.path.basename(target))
+        self.FileName = self._out_name(os.path.basename(target), out=0)
+        self.CONFIG_DIR = os.path.join(work, 'config')
+
         if target_type == 's_img':
             simg2img(target)
             target_type = 'img'
+
+        # Inspect mount point; adjust output directory if the image name looks wrong.
+        with open(self.OUTPUT_IMAGE_FILE, 'rb+') as f:
+            volume = ext4.Volume(f)
+            mount = volume.get_mount_point
+            if mount.startswith('/'):
+                mount = mount[1:]
+            if '/' in mount:
+                mount = mount.split('/')[-1]
+            if any(c in mount for c in '.@#'):
+                mount = ''
+            out_base = self._out_name(os.path.basename(output_dir))
+            if mount and out_base != mount and self.FileName != 'mi_ext':
+                print(f'  [N] Filename appears to be wrong, extracting to {mount}')
+                self.EXTRACT_DIR = (
+                    os.path.realpath(os.path.dirname(output_dir))
+                    + os.sep + mount)
+                self.FileName = mount
+
         if target_type == 'img':
-            with open(os.path.abspath(self.OUTPUT_IMAGE_FILE), 'rb') as f:
-                data = f.read(500000)
-            if re.search(b'\x4d\x4f\x54\x4f', data):
-                print(".....MOTO structure! Fixing.....")
+            with open(self.OUTPUT_IMAGE_FILE, 'rb') as f:
+                data = f.read(_MOTO_PROBE_SIZE)
+            if b'MOTO' in data:
+                print('  [N] MOTO structure detected, fixing...')
                 self.fix_moto(os.path.abspath(self.OUTPUT_IMAGE_FILE))
             self.fix_size()
-            print(f"Extracting {os.path.basename(target)} --> {os.path.basename(self.EXTRACT_DIR)}")
+            print(
+                f'  [..] Extracting {os.path.basename(target)} '
+                f'--> {os.path.basename(self.EXTRACT_DIR)}',
+                end='', flush=True)
             start = dti()
-            self.__ext4extractor()
-            print(f"Done! [{dti() - start}]")
+            self._extract()
+            print(f'\r  [OK] Extracted {os.path.basename(target)} '
+                  f'({dti() - start:.2f}s)')

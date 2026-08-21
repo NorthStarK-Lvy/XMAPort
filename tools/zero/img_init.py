@@ -1,34 +1,76 @@
-# zero package init: sparse->raw adapter backed by bundled simg2img.exe
+"""Sparse-to-raw image converter backed by bundled simg2img.exe.
+
+Provides an in-place conversion: the original sparse file is replaced by
+its raw equivalent.  Non-sparse files are reported and skipped without
+raising, so the caller (imgextractor) can continue gracefully.
+"""
 import os
 import subprocess
 import time
 
+_G = "\033[92m"   # green
+_R = "\033[91m"   # red
+_N = "\033[0m"    # reset
+
 _SPARSE_MAGIC = b'\x3a\xff\x26\xed'  # 0xED26FF3A little-endian
 
 
+def _info(msg):
+    print(f"  {_G}[INFO]{_N}  {msg}")
+
+
+def _error(msg):
+    print(f"  {_R}[ERROR]{_N} {msg}")
+
+
 def _exe():
-    return os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'simg2img.exe')
+    """Return path to simg2img.exe, or None if not found."""
+    p = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        'simg2img.exe')
+    return p if os.path.isfile(p) else None
 
 
 def simg2img(path: str):
-    """
-    Convert a sparse image to a raw image IN-PLACE (replaces the original file).
-    Mirrors upstream utils.simg2img behavior: if the file is not sparse, do nothing.
+    """Convert a sparse image to raw in-place.
+
+    Non-sparse files: print [ERROR] and return (no exception).
+    Conversion failure: print [ERROR], clean up temp file, return.
+    Success: original file is replaced by the raw version.
     """
     try:
         with open(path, 'rb') as f:
             if f.read(4) != _SPARSE_MAGIC:
+                _error(f"{os.path.basename(path)}: not a sparse image, skipping")
                 return
-    except OSError:
+    except OSError as e:
+        _error(f"{os.path.basename(path)}: cannot read ({e})")
         return
+
+    exe = _exe()
+    if not exe:
+        _error("simg2img.exe not found")
+        return
+
     tmp = path + '.unsparse'
     size_mb = os.path.getsize(path) / 1048576
-    desc = f"Converting {os.path.basename(path)} ({size_mb:.1f}MB) sparse->raw"
-    print(f"  [..] {desc}...", end="", flush=True)
+    name = os.path.basename(path)
+    _info(f"Converting {name} ({size_mb:.1f}MB) sparse->raw...")
+
     start = time.time()
-    subprocess.run([_exe(), path, tmp], check=True,
-                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    result = subprocess.run([exe, path, tmp],
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL)
     elapsed = time.time() - start
-    print(f"\r  [OK] {desc} ({elapsed:.1f}s)")
+
+    if result.returncode != 0:
+        _error(f"simg2img.exe failed (exit code {result.returncode})")
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        return
+
     os.remove(path)
     os.rename(tmp, path)
+    _info(f"{name} converted ({elapsed:.1f}s)")
