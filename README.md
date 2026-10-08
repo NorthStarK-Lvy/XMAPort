@@ -6,7 +6,7 @@
 [![Platform](https://img.shields.io/badge/platform-Windows%2010%2F11-lightgrey)](#%E7%B3%BB%E7%BB%9F%E8%A6%81%E6%B1%82)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](#%E8%AE%B8%E5%8F%AF%E8%AF%81)
 
-**XMAPort** 是一款小米 HyperOS 自动化移植（Porting）工具：输入源机型 ROM 与目标底包 ROM 的官方完整包直链，即可自动完成下载、解包、分区迁移、打补丁与重打包，输出可直接刷写的目标机型镜像。
+**XMAPort** 是一款小米 HyperOS 自动化移植（Porting）工具：输入源机型 ROM 与目标底包 ROM 的官方完整包直链、本地压缩包或已解压目录，即可自动完成 ROM 准备、解包、分区迁移、打补丁与重打包，输出目标机型镜像。
 
 ---
 
@@ -19,24 +19,24 @@ XMAPort 面向小米 HyperOS 设备的移植玩法：把一台机型的 HyperOS 
 
 ## 特性
 
-- **全自动 7 步流水线**：下载 → 解压卡刷包 → 解包 payload → 解包分区镜像 → 迁移打补丁 → 重打包 → 汇总输出，一条命令跑通
+- **全自动 7 步流水线**：准备 ROM → 解压卡刷包 → 解包 payload → 解包分区镜像 → 迁移打补丁 → 重打包 → 汇总输出，一条命令跑通
 - **双包并行下载**：源 ROM 与底包并行下载，双行实时进度条（每秒刷新、显示瞬时速度），失败自动整体重试
-- **失败即中断**：下载、解包、迁移、打包任一环节失败立即中止，汇总按真实结果显示成败
+- **可靠的失败传播**：关键前置步骤失败立即中止；分区打包与 vbmeta 补丁失败会计入最终结果并返回非零退出码
 - **完整分区迁移**：迁移 system / system_ext / product / mi_ext 到目标底包，自动处理 odm / vendor / vbmeta 等
 - **智能特性同步**：特性同步、清理 MIUI booster、同步 APEX、刷新率 / 相机 / 人脸解锁同步、build.prop 补丁
 - **联发科支持**：针对天玑 8100 / 8200 的 HWC 补丁
-- **灵活打包**：erofs（lz4hc / lz4 / zstd 等压缩算法）或 ext4，可选生成 super.img、sparse 格式、禁用 vbmeta 校验、注入 adb debug
+- **灵活打包**：erofs（lz4hc / lz4 / zstd 等压缩算法）或 ext4，可选生成 super.img、输出 sparse super.img、禁用 vbmeta 校验、注入 adb debug
 - **命令执行器**：主菜单 [A] 支持用已打包的分区单独合成 super.img
 - **云端构建**：自带 GitHub Actions workflow，无需本地环境即可构建并自动发布 Release
 
 ## 工作流程
 
-1. **下载 ROM**：源包与底包并行，aria2c 多线程下载官方 ROM 完整包直链
+1. **准备 ROM**：直链输入使用 aria2c 并行下载；本地压缩包直接解压；已解压目录直接复用
 2. **解压卡刷包**：使用 7-Zip 解压 ROM zip
 3. **解包 payload**：使用 payload-dumper-go 解包 `payload.bin` / `.dat`
-4. **解包分区镜像**：使用 simg2img / lpunpack / extract.erofs 等工具解包 system、vendor、odm 等分区镜像
+4. **解包分区镜像**：使用 simg2img / extract.erofs / 内置 ext4 解析器解包 system、vendor、odm 等分区镜像
 5. **迁移打补丁**：核心逻辑在 `tools/make_hyper.py`，把源机型的 system / system_ext / product / mi_ext 迁移到目标底包上，包括特性同步、清理 MIUI booster、sync APEX、刷新率 / 相机 / 人脸解锁同步、build.prop 补丁，以及联发科天玑 8100 / 8200 的 HWC 补丁
-6. **重打包**：`tools/pack_partitions.py` 按 erofs（支持 lz4hc / lz4 / zstd 等压缩）或 ext4 打包，可选生成 super.img、生成 sparse 格式、禁用 vbmeta 校验、注入 adb debug
+6. **重打包**：`tools/pack_partitions.py` 按 erofs（支持 lz4hc / lz4 / zstd 等压缩）或 ext4 打包，可选生成 super.img、输出 sparse super.img、禁用 vbmeta 校验、注入 adb debug
 7. **汇总输出**：汇总输出可刷写的目标机型镜像
 
 ## 已测试的移植路线
@@ -53,8 +53,9 @@ XMAPort 面向小米 HyperOS 设备的移植玩法：把一台机型的 HyperOS 
 
 - Windows 10 / 11 64 位
 - Python 3.8+
+- 处理 `.new.dat.br` 格式时需要 Brotli：`pip install Brotli`
 - 约 40GB 可用磁盘空间
-- 可访问 GitHub 的网络环境
+- 在线下载或使用 GitHub Actions 时，需要访问 GitHub 与 ROM 下载服务器；全部使用本地 ROM 时无需网络
 
 ## 使用方法
 
@@ -71,18 +72,27 @@ python XMAPort.py
 ### 方式二：命令行一键模式
 
 ```bat
-python XMAPort.py --auto --device <目标代号> --source <源ROM直链> --target <底包ROM直链>
+python XMAPort.py --auto --pack-super --device <目标代号> --source <源ROM直链> --target <底包ROM直链>
 ```
 
 示例：
 
 ```bat
-python XMAPort.py --auto --device sky --source https://.../source-rom-full.zip --target https://.../target-rom-full.zip
+python XMAPort.py --auto --pack-super --device sky --source https://.../source-rom-full.zip --target https://.../target-rom-full.zip
 ```
 
 - `--device`：目标设备代号（仅允许字母、数字、下划线、连字符）
-- `--source`：源机型 ROM 完整包直链（不能以 `ultimateota` 开头；**留空可复用上次工作区数据**）
-- `--target`：目标底包 ROM 完整包直链（不能以 `ultimateota` 开头；留空同上）
+- `--source`：源机型 ROM 完整包直链、本地压缩包路径或已解压 ROM 目录（**留空可复用上次工作区数据**）
+- `--target`：目标底包 ROM 完整包直链、本地压缩包路径或已解压 ROM 目录（留空同上）
+- `--pack-super`：忽略 `config.ini` 中的 `pack_super` 设置，强制生成 `super.img`（云端构建会自动使用）
+
+本地路径示例：
+
+```bat
+python XMAPort.py --auto --pack-super --device sky --source "D:\ROM\source.zip" --target "D:\ROM\target.zip"
+```
+
+解包、迁移和打包子进程采用 10 分钟空闲看门狗：连续 10 分钟没有任何输出才会终止；只要持续产生输出，任务运行总时长不受限制。aria2 下载使用独立的网络超时与重试设置。
 
 > 注意：使用前请先按 [配置说明](#配置说明) 检查 `config.ini`，特别是 `device_platform` 与 `device_size`。
 
@@ -121,7 +131,7 @@ python XMAPort.py --auto --device sky --source https://.../source-rom-full.zip -
 | `format` | `erofs` 或 `ext4` |
 | `compression` / `compression_level` | erofs 压缩算法与等级（如 `lz4hc` + `8`） |
 | `pack_super` | 是否打包生成 super.img；`false` 时可用主菜单 [A] 单独合成 |
-| `sparse` | 是否生成 sparse 格式镜像 |
+| `sparse` | 生成 super.img 时是否输出 Android sparse 格式 |
 | `metadata_size` / `metadata_slots` | super metadata 大小与插槽数（建议默认 `65536` / `3`） |
 | `virtual_ab` | 是否启用 Virtual A/B |
 | `super_name` / `super_group` | super 分区名与动态分区组名（高通一般 `qti_dynamic_partitions`，MTK 一般 `main`） |
@@ -137,7 +147,7 @@ python XMAPort.py --auto --device sky --source https://.../source-rom-full.zip -
 
 ## 注意事项与常见问题
 
-- **ROM 直链**：`--source` / `--target` 必须是官方完整卡刷包（fastboot 线刷包不可用）的直接下载 URL，不能以 `ultimateota` 开头
+- **ROM 输入**：`--source` / `--target` 支持官方完整卡刷包直链、本地压缩包或已解压目录；网络输入不能以 `ultimateota` 开头，fastboot 线刷包不受支持
 - **平台填错会变砖**：`device_platform` 是高通还是联发科务必核实清楚
 - **super 大小要准确**：`device_size` 与目标设备不符可能导致无法刷入或无法开机
 - **磁盘空间**：下载、解包、打包的中间文件较多，建议预留约 40GB
@@ -157,7 +167,7 @@ python XMAPort.py --auto --device sky --source https://.../source-rom-full.zip -
 ## 许可证
 
 - 项目主代码（`XMAPort.py`、`tools/*.py`）采用 [MIT](LICENSE) 许可证
-- 目录中捆绑的第三方工具分别适用其原始许可证：AGPL-3.0 / GPL-2.0 / LGPL-2.1，仓库中有对应的 LICENSE 文件
+- 目录中捆绑的第三方工具分别适用其原始许可证；再分发时需同时遵守相应的 AGPL-3.0 / GPL-2.0 / LGPL-2.1 等许可要求
 
 ## 致谢
 

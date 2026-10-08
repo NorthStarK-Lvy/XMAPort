@@ -42,7 +42,7 @@ jobs:
       - name: Run XMAPort
         shell: pwsh
         run: |
-          $args = @("--auto", "--device", "${{ inputs.device }}")
+          $args = @("--auto", "--pack-super", "--device", "${{ inputs.device }}")
           if ("${{ inputs.source }}") { $args += "--source"; $args += "${{ inputs.source }}" }
           if ("${{ inputs.target }}") { $args += "--target"; $args += "${{ inputs.target }}" }
           python XMAPort.py @args

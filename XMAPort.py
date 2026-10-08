@@ -29,7 +29,8 @@ BD = "\x1b[1m"
 
 # ---------------- 控制常量 ----------------
 DEBUG_MODE = "1"
-TOOL_TIMEOUT = 10 * 60
+TOOL_IDLE_TIMEOUT = 10 * 60
+TOOL_IDLE_TIMEOUT_RC = 124
 
 # auto 模式标志（--auto CLI），控制是否静默外部工具实时进度输出
 AUTO_MODE = False
@@ -157,18 +158,101 @@ def is_safe_device_name(name):
 
 
 def run_tool(cmd, **kwargs):
-    # 外部工具超过 10 分钟仍未退出时终止，避免流程永久挂起。
+    # 外部工具连续 10 分钟没有任何输出时才终止；持续输出的长任务不设总时长上限。
     label = Path(cmd[0]).name if cmd else "external tool"
+    requested_stdout = kwargs.pop("stdout", None)
+    requested_stderr = kwargs.pop("stderr", None)
+    stream_output = kwargs.pop("stream_output", False)
+    text_mode = kwargs.pop("text", True)
+    encoding = kwargs.pop("encoding", None) or "utf-8"
+    errors = kwargs.pop("errors", "replace")
+    check = kwargs.pop("check", False)
+    if not text_mode:
+        raise ValueError("run_tool only supports text-mode subprocesses")
+
+    combine_stderr = requested_stderr == subprocess.STDOUT
+    stdout_chunks = []
+    stderr_chunks = []
+    activity_lock = threading.Lock()
+    last_activity = [time.monotonic()]
+
+    def _read_stream(pipe, chunks, destination, should_stream, should_capture):
+        try:
+            while True:
+                chunk = pipe.read(1)
+                if not chunk:
+                    break
+                with activity_lock:
+                    last_activity[0] = time.monotonic()
+                if should_capture:
+                    chunks.append(chunk)
+                if should_stream and destination is not None:
+                    destination.write(chunk)
+                    destination.flush()
+        finally:
+            pipe.close()
+
     try:
-        return subprocess.run(cmd, timeout=TOOL_TIMEOUT, **kwargs)
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT if combine_stderr else subprocess.PIPE,
+            text=True,
+            encoding=encoding,
+            errors=errors,
+            **kwargs
+        )
+
+        stdout_stream = requested_stdout is None or stream_output
+        stderr_stream = requested_stderr is None or stream_output
+        readers = [threading.Thread(
+            target=_read_stream,
+            args=(proc.stdout, stdout_chunks, sys.stdout, stdout_stream,
+                  requested_stdout == subprocess.PIPE),
+            daemon=True,
+        )]
+        if not combine_stderr:
+            readers.append(threading.Thread(
+                target=_read_stream,
+                args=(proc.stderr, stderr_chunks, sys.stderr, stderr_stream,
+                      requested_stderr == subprocess.PIPE),
+                daemon=True,
+            ))
+        for reader in readers:
+            reader.start()
+
+        timed_out = False
+        while proc.poll() is None:
+            with activity_lock:
+                idle_for = time.monotonic() - last_activity[0]
+            if idle_for >= TOOL_IDLE_TIMEOUT:
+                timed_out = True
+                proc.kill()
+                break
+            time.sleep(0.2)
+        proc.wait()
+        for reader in readers:
+            reader.join()
+
+        stdout_text = "".join(stdout_chunks) if requested_stdout == subprocess.PIPE else None
+        stderr_text = None
+        if not combine_stderr and requested_stderr == subprocess.PIPE:
+            stderr_text = "".join(stderr_chunks)
+        returncode = TOOL_IDLE_TIMEOUT_RC if timed_out else proc.returncode
+        result = subprocess.CompletedProcess(cmd, returncode, stdout_text, stderr_text)
+        if timed_out:
+            err("{} stopped after {} minutes without output".format(
+                label, TOOL_IDLE_TIMEOUT // 60))
+            log_write("ERROR: {} idle timeout after {} seconds".format(
+                label, TOOL_IDLE_TIMEOUT))
+        if check and returncode != 0:
+            raise subprocess.CalledProcessError(
+                returncode, cmd, output=stdout_text, stderr=stderr_text)
+        return result
     except FileNotFoundError:
         err("{} not found (tool missing or blocked by antivirus)".format(label))
         log_write("ERROR: tool not found: {}".format(cmd[0]))
         return subprocess.CompletedProcess(cmd, 127, stdout="", stderr="")
-    except subprocess.TimeoutExpired:
-        err("{} timed out after {} minutes".format(label, TOOL_TIMEOUT // 60))
-        log_write("ERROR: {} timed out after {} seconds".format(label, TOOL_TIMEOUT))
-        return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="")
 
 
 # ---------------- 全局状态 ----------------
@@ -186,6 +270,22 @@ RETRY_WAIT = 3
 CLI_SOURCE_URL = ""
 CLI_TARGET_URL = ""
 CLI_DEVICE = ""
+CLI_PACK_SUPER = False
+CLI_SOURCE_LOCAL = ""
+CLI_TARGET_LOCAL = ""
+
+
+URL_SCHEME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*://")
+
+
+def split_rom_input(value):
+    value = value.strip()
+    if not value:
+        return "", ""
+    is_windows_drive = bool(re.match(r"^[A-Za-z]:[\\/]", value))
+    if URL_SCHEME_RE.match(value) and not is_windows_drive:
+        return value, ""
+    return "", str(Path(value).expanduser().resolve())
 
 
 # ---------------- [A] 工具状态检查 ----------------
@@ -335,11 +435,19 @@ def read_config():
     info("Config loaded. SRC_URL=[{}]".format(SRC_URL))
     info("Config loaded. TGT_URL=[{}]".format(TGT_URL))
     # CLI 覆盖（--source / --target 优先于 config.ini）
-    if CLI_SOURCE_URL:
+    if CLI_SOURCE_LOCAL:
+        SRC_URL = ""
+        info("Source ROM overridden by local path")
+        log_write("Source ROM overridden by local CLI path: {}".format(CLI_SOURCE_LOCAL))
+    elif CLI_SOURCE_URL:
         SRC_URL = CLI_SOURCE_URL
         info("SRC_URL overridden by --source")
         log_write("SRC_URL overridden by --source CLI arg")
-    if CLI_TARGET_URL:
+    if CLI_TARGET_LOCAL:
+        TGT_URL = ""
+        info("Target ROM overridden by local path")
+        log_write("Target ROM overridden by local CLI path: {}".format(CLI_TARGET_LOCAL))
+    elif CLI_TARGET_URL:
         TGT_URL = CLI_TARGET_URL
         info("TGT_URL overridden by --target")
         log_write("TGT_URL overridden by --target CLI arg")
@@ -400,6 +508,8 @@ def read_packing_config():
             key = key.strip().lower()
             if key in cfg:
                 cfg[key] = val.strip()
+    if CLI_PACK_SUPER:
+        cfg["pack_super"] = "true"
     return cfg
 
 
@@ -684,18 +794,23 @@ def extract_archive(src_dir, out_dir, label):
     os.makedirs(out_dir, exist_ok=True)
     count = 0
     fail = 0
-    for ext in ["*.zip", "*.tar", "*.gz", "*.tgz", "*.7z", "*.rar"]:
-        for f in sorted(src_dir.glob(ext)):
-            count += 1
-            info("Processing: {}".format(f.name))
-            rc = run_tool([str(SZ), "x", str(f), "-o" + str(out_dir), "-y"],
-                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode
-            if rc == 0:
-                info("Extracted: {}".format(f.name))
-            else:
-                err("Extract failed: {}".format(f.name))
-                log_write("ERROR: extract failed: {} (rc={})".format(f.name, rc))
-                fail += 1
+    if src_dir.is_file():
+        archives = [src_dir]
+    else:
+        archives = []
+        for ext in ["*.zip", "*.tar", "*.gz", "*.tgz", "*.7z", "*.rar"]:
+            archives.extend(sorted(src_dir.glob(ext)))
+    for f in archives:
+        count += 1
+        info("Processing: {}".format(f.name))
+        rc = run_tool([str(SZ), "x", str(f), "-o" + str(out_dir), "-y"],
+                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode
+        if rc == 0:
+            info("Extracted: {}".format(f.name))
+        else:
+            err("Extract failed: {}".format(f.name))
+            log_write("ERROR: extract failed: {} (rc={})".format(f.name, rc))
+            fail += 1
     if count == 0:
         err("No archives found in {}".format(src_dir))
         log_write("ERROR: no archives found in {}".format(src_dir))
@@ -866,17 +981,19 @@ def inject_adb_debug(pack_cfg):
 # ---------------- vbmeta 禁验 ----------------
 def patch_vbmeta(pack_cfg):
     if pack_cfg.get("patch_vbmeta", "true").lower() != "true":
-        return
+        return 0
     log_write("Patching vbmeta (disable AVB verification)")
     info("Patching vbmeta images (disable AVB verification)...")
     count = 0
+    copy_failed = 0
     for f in sorted(TGT_UNPACK.glob("vbmeta*.img")):
         if f.exists():
             try:
                 shutil.copy2(f, PACK_OUT / f.name)
-            except Exception:
-                err("failed to copy: {}".format(f.name))
-                log_write("ERROR: copy failed: {}".format(f.name))
+            except Exception as e:
+                err("failed to copy {}: {}".format(f.name, e))
+                log_write("ERROR: copy failed: {} ({})".format(f.name, e))
+                copy_failed += 1
                 continue
             if (PACK_OUT / f.name).exists():
                 info("vbmeta copied: {}".format(f.name))
@@ -884,15 +1001,21 @@ def patch_vbmeta(pack_cfg):
                 count += 1
     if count == 0:
         err("No vbmeta*.img found in target payload")
-        log_write("WARNING: no vbmeta*.img in target_payload, skip patching")
-        return
-    rc = subprocess.run([PY, str(TOOLS / "vbmeta_patch.py"), str(PACK_OUT)]).returncode
+        log_write("ERROR: no vbmeta*.img in target_payload, patching required but impossible")
+        return 1
+    if copy_failed:
+        err("{} vbmeta image(s) failed to copy".format(copy_failed))
+        log_write("ERROR: {} vbmeta image(s) failed to copy".format(copy_failed))
+        return 1
+    rc = run_tool([PY, str(TOOLS / "vbmeta_patch.py"), str(PACK_OUT)]).returncode
     if rc != 0:
         err("vbmeta patch reported errors")
-        log_write("WARNING: vbmeta_patch.py reported errors")
+        log_write("ERROR: vbmeta_patch.py reported errors (rc={})".format(rc))
+        return 1
     else:
         info("vbmeta patch done")
         log_write("vbmeta patched successfully")
+    return 0
 
 
 def _append_lpc_entry(lpc_args, part, img_path, size, pack_cfg):
@@ -906,6 +1029,9 @@ def _append_lpc_entry(lpc_args, part, img_path, size, pack_cfg):
 def pack_one_partition(part, fs_dir, pack_cfg, lpc_args, counters):
     src = fs_dir / part
     if not src.exists():
+        err("{}: source filesystem directory not found".format(part))
+        log_write("ERROR: {} source filesystem directory not found: {}".format(part, src))
+        counters["pack_fail"] += 1
         return
     info("Packing partition: {}".format(part))
     log_write("Packing {}...".format(part))
@@ -988,37 +1114,16 @@ def create_super_img(pack_cfg, lpc_args, pack_ok):
         cmd.append("--sparse")
     cmd += ["--output=" + str(PACK_OUT / "super.img")]
     info("lpmake command: " + subprocess.list2cmdline(cmd))
-    # lpmake 日志实时滚屏（不吞日志），同时逐行留档用于失败分类；
-    # 10 分钟看门狗防止 lpmake 卡死。
-    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
-                            stderr=subprocess.STDOUT, text=True,
-                            errors="replace")
-    timed_out = False
-
-    def _kill_lpmake():
-        nonlocal timed_out
-        timed_out = True
-        try:
-            proc.kill()
-        except Exception:
-            pass
-
-    watchdog = threading.Timer(TOOL_TIMEOUT, _kill_lpmake)
-    watchdog.start()
-    output_lines = []
-    try:
-        for line in proc.stdout:
-            sys.stdout.write(line)
-            sys.stdout.flush()
-            output_lines.append(line)
-        proc.wait()
-    finally:
-        watchdog.cancel()
+    # 实时显示并保留 lpmake 输出；只有连续无输出达到阈值才会终止。
+    proc = run_tool(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                    text=True, errors="replace", stream_output=True)
     rc = proc.returncode
-    output = "".join(output_lines)
-    if timed_out:
-        err("lpmake timed out after {} minutes".format(TOOL_TIMEOUT // 60))
-        log_write("ERROR: lpmake timed out after {} seconds".format(TOOL_TIMEOUT))
+    output = proc.stdout or ""
+    if rc == TOOL_IDLE_TIMEOUT_RC:
+        err("lpmake stopped after {} minutes without output".format(
+            TOOL_IDLE_TIMEOUT // 60))
+        log_write("ERROR: lpmake idle timeout after {} seconds".format(
+            TOOL_IDLE_TIMEOUT))
         return 2
     if rc != 0:
         lower = output.lower()
@@ -1095,6 +1200,12 @@ def one_click_port(auto=False):
         raise
     pack_cfg = read_packing_config()
 
+    source_local = Path(CLI_SOURCE_LOCAL) if CLI_SOURCE_LOCAL else None
+    target_local = Path(CLI_TARGET_LOCAL) if CLI_TARGET_LOCAL else None
+    for label, local_path in [("Source", source_local), ("Target", target_local)]:
+        if local_path is not None and not local_path.exists():
+            return _abort_port(auto, "{} local ROM path not found: {}".format(label, local_path))
+
     # 输入/读取目标设备代号
     cfg_txt = WORKSPACE / "config.txt"
     if CLI_DEVICE:
@@ -1123,8 +1234,10 @@ def one_click_port(auto=False):
         raise ReturnToMenu()
     cfg_txt.write_text("TARGET_DEVICE={}\n".format(TARGET_DEVICE), encoding="gbk")
 
-    print("  {}  Source URL:   {}{}{}".format(W, C, SRC_URL[:50], N))
-    print("  {}  Target URL:   {}{}{}".format(W, C, TGT_URL[:50], N))
+    source_display = str(source_local) if source_local is not None else SRC_URL[:50]
+    target_display = str(target_local) if target_local is not None else TGT_URL[:50]
+    print("  {}  Source ROM:   {}{}{}".format(W, C, source_display, N))
+    print("  {}  Target ROM:   {}{}{}".format(W, C, target_display, N))
     print("  {}  Device:   {}{}{}".format(W, G, TARGET_DEVICE, N))
     print("  {}  Format:    {}{}{}  Compression: {}{} level {}{}  Pack super: {}{}{}".format(
         W, G, pack_cfg["format"], N, G, pack_cfg["compression"], pack_cfg["compression_level"], N,
@@ -1172,14 +1285,34 @@ def one_click_port(auto=False):
     # URL 有值时下载必然产生了新归档，解压失败才算真失败。
     info("=== Step 2/7: Extract archives ===")
     log_write("Step 2: Extract archives start")
-    if SRC_URL:
+    source_rom_dir = SRC_ROM
+    target_rom_dir = TGT_ROM
+    if source_local is not None:
+        if source_local.is_dir():
+            source_rom_dir = source_local
+            info("[1/2] Using local extracted source ROM directory...")
+            log_write("Step 2: using local source ROM directory: {}".format(source_local))
+        else:
+            info("[1/2] Extracting local source ROM archive...")
+            if extract_archive(source_local, SRC_ROM, "Source") != 0:
+                return _abort_port(auto, "Step 2 failed: local source ROM extraction")
+    elif SRC_URL:
         info("[1/2] Extracting source archive...")
         if extract_archive(SRC_DL, SRC_ROM, "Source") != 0:
             return _abort_port(auto, "Step 2 failed: source archive extraction")
     else:
         info("[1/2] SRC_URL empty, reusing existing source workspace")
         log_write("Step 2: SRC_URL empty, reuse source workspace")
-    if TGT_URL:
+    if target_local is not None:
+        if target_local.is_dir():
+            target_rom_dir = target_local
+            info("[2/2] Using local extracted target ROM directory...")
+            log_write("Step 2: using local target ROM directory: {}".format(target_local))
+        else:
+            info("[2/2] Extracting local target ROM archive...")
+            if extract_archive(target_local, TGT_ROM, "Target") != 0:
+                return _abort_port(auto, "Step 2 failed: local target ROM extraction")
+    elif TGT_URL:
         info("[2/2] Extracting target archive...")
         if extract_archive(TGT_DL, TGT_ROM, "Target") != 0:
             return _abort_port(auto, "Step 2 failed: target archive extraction")
@@ -1192,14 +1325,14 @@ def one_click_port(auto=False):
     # ---------------- Step 3: 解包 payload ----------------
     info("=== Step 3/7: Extract payload ===")
     log_write("Step 3: Extract payload start")
-    if not check_payload_extracted(SRC_UNPACK):
+    if source_local is not None or not check_payload_extracted(SRC_UNPACK):
         info("[1/2] Extracting source payload...")
-        if extract_payload_bin(SRC_ROM, SRC_UNPACK) != 0:
+        if extract_payload_bin(source_rom_dir, SRC_UNPACK) != 0:
             return _abort_port(auto, "Step 3 failed: source payload extraction")
         log_write("Source payload extracted to: {}".format(SRC_UNPACK))
-    if not check_payload_extracted(TGT_UNPACK):
+    if target_local is not None or not check_payload_extracted(TGT_UNPACK):
         info("[2/2] Extracting target payload...")
-        if extract_payload_bin(TGT_ROM, TGT_UNPACK) != 0:
+        if extract_payload_bin(target_rom_dir, TGT_UNPACK) != 0:
             return _abort_port(auto, "Step 3 failed: target payload extraction")
         log_write("Target payload extracted to: {}".format(TGT_UNPACK))
     info("Step 3 done")
@@ -1372,7 +1505,8 @@ def one_click_port(auto=False):
         log_write("ERROR: super.img creation failed (rc={})".format(super_rc))
 
     # vbmeta 禁验（在 super 打包之后、汇总之前，不受 pack_super 限制）
-    patch_vbmeta(pack_cfg)
+    if patch_vbmeta(pack_cfg) != 0:
+        port_failed = True
 
     # ---------------- Step 7: 汇总 ----------------
     port_ok = (not port_failed) and counters["pack_fail"] == 0
@@ -1607,22 +1741,26 @@ def parse_args():
     parser.add_argument("--device", default="",
                         help="Target device codename (overrides config.txt)")
     parser.add_argument("--source", default="",
-                        help="Source ROM URL (overrides config.ini [source] url)")
+                        help="Source ROM URL, local archive, or extracted directory")
     parser.add_argument("--target", default="",
-                        help="Target ROM URL (overrides config.ini [target] url)")
+                        help="Target ROM URL, local archive, or extracted directory")
     parser.add_argument("-y", "--yes", action="store_true",
                         help="Skip confirmation prompts")
+    parser.add_argument("--pack-super", action="store_true",
+                        help="Generate super.img regardless of config.ini pack_super setting")
     return parser.parse_args()
 
 
 def main():
-    global CLI_SOURCE_URL, CLI_TARGET_URL, CLI_DEVICE
+    global CLI_SOURCE_URL, CLI_TARGET_URL, CLI_DEVICE, CLI_PACK_SUPER
+    global CLI_SOURCE_LOCAL, CLI_TARGET_LOCAL
     args = parse_args()
 
     # CLI 覆盖
-    CLI_SOURCE_URL = args.source
-    CLI_TARGET_URL = args.target
+    CLI_SOURCE_URL, CLI_SOURCE_LOCAL = split_rom_input(args.source)
+    CLI_TARGET_URL, CLI_TARGET_LOCAL = split_rom_input(args.target)
     CLI_DEVICE = args.device
+    CLI_PACK_SUPER = args.pack_super
 
     # 初始化控制台与目录
     init_console(auto=args.auto)

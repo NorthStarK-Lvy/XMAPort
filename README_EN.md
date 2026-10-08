@@ -6,7 +6,7 @@
 [![Platform](https://img.shields.io/badge/platform-Windows%2010%2F11-lightgrey)](#requirements)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](#license)
 
-**XMAPort** is an automated porting tool for Xiaomi HyperOS: feed it the official full-ROM direct links of a source device and a target base ROM, and it automatically handles downloading, unpacking, partition migration, patching and repacking — producing flashable images for the target device.
+**XMAPort** is an automated porting tool for Xiaomi HyperOS: provide the source ROM and target base ROM as official full-ROM direct links, local archives, or extracted directories, and it automatically handles ROM preparation, unpacking, partition migration, patching and repacking for the target device.
 
 ---
 
@@ -18,32 +18,33 @@ The whole pipeline is driven by the main script `XMAPort.py` (Python 3.8+, Windo
 
 ## Features
 
-- **Fully automated 7-step pipeline**: download → extract recovery ROM → unpack payload → unpack partition images → migrate & patch → repack → collect output, all in one command
+- **Fully automated 7-step pipeline**: prepare ROMs → extract recovery ROM → unpack payload → unpack partition images → migrate & patch → repack → collect output, all in one command
 - **Parallel dual-ROM download**: source and base ROMs download in parallel with a two-line live progress bar (refreshed every second, showing instant speed) and automatic whole-run retries
-- **Fail-fast pipeline**: any failure in download, extraction, migration or packing aborts the run; the summary reflects the real result
+- **Reliable failure propagation**: critical prerequisite failures abort immediately; partition-packing and vbmeta-patching failures are included in the final result and produce a non-zero exit code
 - **Full partition migration**: migrates system / system_ext / product / mi_ext onto the target base ROM, with automatic handling of odm / vendor / vbmeta
 - **Smart feature syncing**: feature sync, MIUI booster cleanup, APEX sync, refresh-rate / camera / face-unlock sync, build.prop patching
 - **MediaTek support**: HWC patches for Dimensity 8100 / 8200
-- **Flexible packing**: erofs (with lz4hc / lz4 / zstd compression) or ext4; optional super.img, sparse images, vbmeta verification disabling, and adb debug injection
+- **Flexible packing**: erofs (with lz4hc / lz4 / zstd compression) or ext4; optional super.img generation, sparse super.img output, vbmeta verification disabling, and adb debug injection
 - **Command executor**: menu [A] can compose a super.img from already-packed partitions
 - **Cloud builds**: bundled GitHub Actions workflow lets you build and publish Releases without a local environment
 
 ## Workflow
 
-1. **Download ROMs**: source and base ROMs download in parallel via aria2c multi-threaded download of official full-ROM direct links
+1. **Prepare ROMs**: direct URLs download in parallel via aria2c; local archives are extracted directly; extracted directories are used as-is
 2. **Extract recovery ROM**: unzip the ROM zip with 7-Zip
 3. **Unpack payload**: unpack `payload.bin` / `.dat` with payload-dumper-go
-4. **Unpack partition images**: unpack system, vendor, odm and other partition images with simg2img / lpunpack / extract.erofs, etc.
+4. **Unpack partition images**: unpack system, vendor, odm and other partition images with simg2img, extract.erofs and the bundled ext4 parser
 5. **Migrate & patch**: the core logic in `tools/make_hyper.py` migrates the source's system / system_ext / product / mi_ext onto the target base ROM — including feature sync, MIUI booster cleanup, APEX sync, refresh-rate / camera / face-unlock sync, build.prop patches, and HWC patches for MediaTek Dimensity 8100 / 8200
-6. **Repack**: `tools/pack_partitions.py` packs partitions as erofs (supporting lz4hc / lz4 / zstd and other compression algorithms) or ext4, with optional super.img generation, sparse images, vbmeta verification disabling and adb debug injection
+6. **Repack**: `tools/pack_partitions.py` packs partitions as erofs (supporting lz4hc / lz4 / zstd and other compression algorithms) or ext4, with optional super.img generation, sparse super.img output, vbmeta verification disabling and adb debug injection
 7. **Collect output**: assembles the final flashable images for the target device
 
 ## Requirements
 
 - Windows 10 / 11 64-bit
 - Python 3.8+
+- Brotli is required for `.new.dat.br` input: `pip install Brotli`
 - About 40GB of free disk space
-- Network access to GitHub and Xiaomi CDN
+- Access to GitHub and the ROM download server is required for online downloads or GitHub Actions; an all-local ROM workflow does not require network access
 
 ## Usage
 
@@ -60,18 +61,27 @@ Besides one-click porting, the main menu offers **[A] Command Executor** (1 = co
 ### Option 2: One-shot CLI mode
 
 ```bat
-python XMAPort.py --auto --device <target-codename> --source <source-rom-url> --target <base-rom-url>
+python XMAPort.py --auto --pack-super --device <target-codename> --source <source-rom-url> --target <base-rom-url>
 ```
 
 Example:
 
 ```bat
-python XMAPort.py --auto --device sky --source https://.../source-rom-full.zip --target https://.../target-rom-full.zip
+python XMAPort.py --auto --pack-super --device sky --source https://.../source-rom-full.zip --target https://.../target-rom-full.zip
 ```
 
 - `--device`: target device codename (letters, digits, underscore and hyphen only)
-- `--source`: direct URL of the source device's full ROM (must not start with `ultimateota`; **leave empty to reuse the previous workspace**)
-- `--target`: direct URL of the target base ROM (must not start with `ultimateota`; leave empty as above)
+- `--source`: source ROM direct URL, local archive path, or extracted ROM directory (**leave empty to reuse the previous workspace**)
+- `--target`: target ROM direct URL, local archive path, or extracted ROM directory (leave empty as above)
+- `--pack-super`: generate `super.img` regardless of the `pack_super` value in `config.ini` (used automatically by cloud builds)
+
+Local path example:
+
+```bat
+python XMAPort.py --auto --pack-super --device sky --source "D:\ROM\source.zip" --target "D:\ROM\target.zip"
+```
+
+Unpacking, migration and packing subprocesses use a 10-minute idle watchdog: a process is stopped only after producing no output for 10 consecutive minutes. Tasks that keep producing output have no total runtime limit. aria2 downloads use separate network timeout and retry settings.
 
 > Note: before running, check `config.ini` as described in [Configuration](#configuration) — especially `device_platform` and `device_size`.
 
@@ -110,7 +120,7 @@ Put the source / base ROM direct links under `[source]` / `[target]` — **leave
 | `format` | `erofs` or `ext4` |
 | `compression` / `compression_level` | erofs compression algorithm and level (e.g. `lz4hc` + `8`) |
 | `pack_super` | Whether to pack a super.img; when `false`, compose one via menu [A] |
-| `sparse` | Whether to output sparse-format images |
+| `sparse` | Whether super.img is emitted in Android sparse format |
 | `metadata_size` / `metadata_slots` | super metadata size and slot count (defaults `65536` / `3` recommended) |
 | `virtual_ab` | Whether Virtual A/B is enabled |
 | `super_name` / `super_group` | super partition name and dynamic-partition group (`qti_dynamic_partitions` on Qualcomm, `main` on MTK) |
@@ -126,7 +136,7 @@ The prop list below the `; patch build prop list` marker line is written into bu
 
 ## Notes & FAQ
 
-- **ROM direct links**: `--source` / `--target` must be direct download URLs of official full recovery ROMs (fastboot packages are not supported), and must not start with `ultimateota`
+- **ROM input**: `--source` / `--target` accept an official full recovery ROM direct URL, local archive, or extracted directory; network inputs must not start with `ultimateota`, and fastboot packages are not supported
 - **Wrong platform can brick your device**: double-check whether the target is Qualcomm or MediaTek before setting `device_platform`
 - **super size must be accurate**: a `device_size` that doesn't match the device may make the image unflashable or unbootable
 - **Disk space**: downloads, unpacking and repacking produce many intermediate files — reserve about 40GB
@@ -154,7 +164,7 @@ These are the verified routes. Other devices with matching architectures may wor
 ## License
 
 - The project's main code (`XMAPort.py`, `tools/*.py`) is licensed under [MIT](LICENSE)
-- The bundled third-party tools are governed by their original licenses respectively: AGPL-3.0 / GPL-2.0 / LGPL-2.1, with the corresponding LICENSE files included in the repository
+- Bundled third-party tools remain governed by their original licenses; redistribution must comply with the applicable AGPL-3.0, GPL-2.0, LGPL-2.1 and other license terms
 
 ## Acknowledgements
 

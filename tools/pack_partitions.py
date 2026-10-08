@@ -210,13 +210,12 @@ def detect_content_dir(work, name):
 def call(cmd):
     try:
         print("    $ " + subprocess.list2cmdline(cmd))
-        result = subprocess.run(cmd, capture_output=True, text=True, errors='replace')
-        if result.returncode != 0:
-            if result.stdout:
-                print(result.stdout.rstrip())
-            if result.stderr:
-                print(result.stderr.rstrip())
-        return result.returncode
+        proc = subprocess.Popen(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            text=True, errors='replace')
+        for line in proc.stdout:
+            print(line, end='', flush=True)
+        return proc.wait()
     except FileNotFoundError:
         print(f"    [X] 工具未找到: {cmd[0]}")
         return 1

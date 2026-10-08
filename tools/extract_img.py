@@ -48,7 +48,7 @@ def detect(img):
 def run(cmd, desc="Processing"):
     print(f"  [..] {desc}...", end="", flush=True)
     start = time.time()
-    subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    subprocess.run(cmd, check=True)
     elapsed = time.time() - start
     print(f"\r  [OK] {desc} ({elapsed:.1f}s)")
 
