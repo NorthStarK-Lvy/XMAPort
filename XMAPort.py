@@ -3,6 +3,8 @@
 
 
 import argparse
+import hashlib
+from urllib.parse import urlsplit
 import os
 import platform
 import re
@@ -415,11 +417,13 @@ device_platform=Qualcomm
 [source]
 ; Source ROM download URL (direct URL, must not start with ultimateota)
 ; Used to extract system / system_ext / product / mi_ext partitions
+; Empty URL: use local archives in workspace/download_source, otherwise reuse workspace
 url=https://bkt-sgp-miui-ota-update-alisgp.oss-ap-southeast-1.aliyuncs.com/OS4.0.0.15.XPACNXM/nezha-ota_full-OS4.0.0.15.XPACNXM-user-17.0-87b65524dc.zip
 
 [target]
 ; Base ROM download URL (direct URL, must not start with ultimateota)
 ; Used to extract odm / vendor target partitions
+; Empty URL: use local archives in workspace/download_target, otherwise reuse workspace
 url=https://bkt-sgp-miui-ota-update-alisgp.oss-ap-southeast-1.aliyuncs.com/OS2.0.204.0.VMWCNXM/sky-ota_full-OS2.0.204.0.VMWCNXM-user-15.0-5b8f723fe7.zip
 
 [settings]
@@ -547,9 +551,19 @@ DL_SUMMARY_RE = re.compile(
     r"\[#\w+ (\S+)/(\S+)\((\d+|--)%\)[^\]]*?DL:(\S+)")
 
 
+def download_archive_path(url, out_dir):
+    # Explicit output prevents old archives or Content-Disposition from selecting the input.
+    suffix = Path(urlsplit(url).path).suffix.lower()
+    if suffix not in (".zip", ".tar", ".gz", ".tgz", ".7z", ".rar"):
+        suffix = ".zip"
+    name = "download-" + hashlib.sha256(url.encode("utf-8")).hexdigest()[:16] + suffix
+    return Path(out_dir) / name
+
+
 def _aria2_cmd(url, out_dir):
     return [
         str(ARIA2), url,
+        "--out=" + download_archive_path(url, out_dir).name,
         "-d", str(out_dir),
         "-x", str(MAX_CONN),
         "-s", str(THREADS),
@@ -679,30 +693,104 @@ def download_roms(jobs):
 
 
 # ---------------- Step 2 解包 ----------------
-def extract_archive(src_dir, out_dir, label):
-    src_dir = Path(src_dir)
-    os.makedirs(out_dir, exist_ok=True)
-    count = 0
-    fail = 0
-    for ext in ["*.zip", "*.tar", "*.gz", "*.tgz", "*.7z", "*.rar"]:
-        for f in sorted(src_dir.glob(ext)):
-            count += 1
-            info("Processing: {}".format(f.name))
-            rc = run_tool([str(SZ), "x", str(f), "-o" + str(out_dir), "-y"],
-                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode
-            if rc == 0:
-                info("Extracted: {}".format(f.name))
-            else:
-                err("Extract failed: {}".format(f.name))
-                log_write("ERROR: extract failed: {} (rc={})".format(f.name, rc))
-                fail += 1
-    if count == 0:
-        err("No archives found in {}".format(src_dir))
-        log_write("ERROR: no archives found in {}".format(src_dir))
-        return 1
-    if fail:
-        err("{}/{} archive(s) failed to extract".format(fail, count))
-        log_write("ERROR: {}/{} archive(s) failed to extract".format(fail, count))
+ARCHIVE_PATTERNS = ("*.zip", "*.tar", "*.gz", "*.tgz", "*.7z", "*.rar")
+
+
+def local_archives(src_dir):
+    return sorted({f for pattern in ARCHIVE_PATTERNS
+                   for f in Path(src_dir).glob(pattern) if f.is_file()})
+
+
+def select_archive(url, src_dir):
+    if url:
+        archive = download_archive_path(url, src_dir)
+        if not archive.is_file() or archive.stat().st_size == 0:
+            raise ValueError("Downloaded archive missing or empty: {}".format(archive))
+    else:
+        archives = local_archives(src_dir)
+        if len(archives) > 1:
+            raise ValueError("Multiple local archives in {}: {}. Keep only the intended package.".format(
+                src_dir, ", ".join(f.name for f in archives)))
+        if not archives:
+            return None
+        archive = archives[0]
+    if archive.stat().st_size == 0 or archive.with_name(archive.name + ".aria2").exists():
+        raise ValueError("Archive empty or download incomplete: {}".format(archive))
+    return archive
+
+
+def checked_workspace_path(path):
+    path = Path(path)
+    allowed = (SRC_ROM, TGT_ROM, SRC_UNPACK, TGT_UNPACK, SRC_FS, TGT_FS)
+    root = WORKSPACE.resolve()
+    if root != WORKSPACE.absolute():
+        raise ValueError("Linked workspace blocks cleanup: {}".format(WORKSPACE))
+    if path not in allowed or path.is_symlink() or getattr(path, "is_junction", lambda: False)():
+        raise ValueError("Refusing cleanup of unexpected path: {}".format(path))
+    resolved = path.resolve()
+    if root not in resolved.parents:
+        raise ValueError("Cleanup path escapes workspace: {}".format(path))
+    # Refuse linked descendants so recursive cleanup cannot affect another tree.
+    if path.exists():
+        for parent, dirs, files in os.walk(path, followlinks=False):
+            for name in dirs + files:
+                child = Path(parent) / name
+                if child.is_symlink() or getattr(child, "is_junction", lambda: False)() or child.resolve() != child.absolute():
+                    raise ValueError("Linked entry blocks workspace cleanup: {}".format(child))
+    return path
+
+
+def rebuild_directory(path):
+    path = checked_workspace_path(path)
+    if path.exists():
+        shutil.rmtree(path)
+    path.mkdir(parents=True, exist_ok=True)
+
+
+def rebuild_filesystem(path):
+    # Preserve user rules; all partition trees and generated metadata are rebuilt.
+    path = checked_workspace_path(path)
+    path.mkdir(parents=True, exist_ok=True)
+    config = path / "config"
+    if config.exists() and not config.is_dir():
+        raise ValueError("Filesystem config path is not a directory: {}".format(config))
+    for child in path.iterdir():
+        if child == config:
+            continue
+        if child.is_dir():
+            shutil.rmtree(child)
+        else:
+            child.unlink()
+    config.mkdir(exist_ok=True)
+    for child in config.iterdir():
+        if child.name in ("fs_special.conf", "fc_special.conf"):
+            if not child.is_file():
+                raise ValueError("Custom rule is not a file: {}".format(child))
+            continue
+        if child.is_dir():
+            shutil.rmtree(child)
+        else:
+            child.unlink()
+
+
+def incomplete_marker(path):
+    return Path(path).with_name(Path(path).name + ".incomplete")
+
+
+def payload_is_usable(path):
+    path = Path(path)
+    required = ("system", "system_ext", "product", "mi_ext") if path == SRC_UNPACK else ("odm", "vendor")
+    return all((path / (part + ".img")).is_file()
+               and (path / (part + ".img")).stat().st_size > 0 for part in required)
+
+
+def extract_archive(archive, out_dir, label):
+    info("Processing {} archive: {}".format(label, archive.name))
+    rc = run_tool([str(SZ), "x", str(archive), "-o" + str(out_dir), "-y"],
+                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode
+    if rc != 0:
+        err("Extract failed: {}".format(archive.name))
+        log_write("ERROR: extract failed: {} (rc={})".format(archive.name, rc))
         return 1
     return 0
 
@@ -1167,56 +1255,59 @@ def one_click_port(auto=False):
     info("Step 1 done")
     log_write("Step 1: Download ROM done")
 
-    # ---------------- Step 2: 解压 ----------------
-    # URL 留空 = 复用上次工作区（设计如此）：无归档可解压时跳过而非报错；
-    # URL 有值时下载必然产生了新归档，解压失败才算真失败。
+    # Resolve both inputs before touching extracted data.
+    try:
+        source_archive = select_archive(SRC_URL, SRC_DL)
+        target_archive = select_archive(TGT_URL, TGT_DL)
+    except (OSError, ValueError) as exc:
+        return _abort_port(auto, "Input selection failed: {}".format(exc))
+    sides = [("Source", source_archive, SRC_ROM, SRC_UNPACK, SRC_FS),
+             ("Target", target_archive, TGT_ROM, TGT_UNPACK, TGT_FS)]
+    # A failed extraction is never silently reused. Recover using an archive.
+    for label, archive, rom, payload, filesystem in sides:
+        if archive is None and incomplete_marker(payload).exists():
+            return _abort_port(auto, "{} extraction incomplete; provide a ROM package to rebuild.".format(label))
+
     info("=== Step 2/7: Extract archives ===")
     log_write("Step 2: Extract archives start")
-    if SRC_URL:
-        info("[1/2] Extracting source archive...")
-        if extract_archive(SRC_DL, SRC_ROM, "Source") != 0:
-            return _abort_port(auto, "Step 2 failed: source archive extraction")
-    else:
-        info("[1/2] SRC_URL empty, reusing existing source workspace")
-        log_write("Step 2: SRC_URL empty, reuse source workspace")
-    if TGT_URL:
-        info("[2/2] Extracting target archive...")
-        if extract_archive(TGT_DL, TGT_ROM, "Target") != 0:
-            return _abort_port(auto, "Step 2 failed: target archive extraction")
-    else:
-        info("[2/2] TGT_URL empty, reusing existing target workspace")
-        log_write("Step 2: TGT_URL empty, reuse target workspace")
-    info("Step 2 done")
+    for label, archive, rom, payload, filesystem in sides:
+        if archive is None:
+            info("{}: no URL/local archive, reusing existing payload or ROM.".format(label))
+            continue
+        try:
+            incomplete_marker(payload).write_text("archive extraction started\n", encoding="ascii")
+            rebuild_directory(rom)
+            if extract_archive(archive, rom, label) != 0:
+                return _abort_port(auto, "Step 2 failed: {} archive extraction".format(label))
+        except (OSError, ValueError) as exc:
+            return _abort_port(auto, "Step 2 failed: {}: {}".format(label, exc))
     log_write("Step 2: Extract archives done")
 
-    # ---------------- Step 3: 解包 payload ----------------
     info("=== Step 3/7: Extract payload ===")
     log_write("Step 3: Extract payload start")
-    if not check_payload_extracted(SRC_UNPACK):
-        info("[1/2] Extracting source payload...")
-        if extract_payload_bin(SRC_ROM, SRC_UNPACK) != 0:
-            return _abort_port(auto, "Step 3 failed: source payload extraction")
-        log_write("Source payload extracted to: {}".format(SRC_UNPACK))
-    if not check_payload_extracted(TGT_UNPACK):
-        info("[2/2] Extracting target payload...")
-        if extract_payload_bin(TGT_ROM, TGT_UNPACK) != 0:
-            return _abort_port(auto, "Step 3 failed: target payload extraction")
-        log_write("Target payload extracted to: {}".format(TGT_UNPACK))
-    info("Step 3 done")
+    for label, archive, rom, payload, filesystem in sides:
+        if archive is None and payload_is_usable(payload):
+            info("{}: reusing partition images.".format(label))
+            continue
+        try:
+            incomplete_marker(payload).write_text("payload extraction started\n", encoding="ascii")
+            rebuild_directory(payload)
+            if extract_payload_bin(rom, payload) != 0 or not payload_is_usable(payload):
+                return _abort_port(auto, "Step 3 failed: {} payload extraction or required images missing/empty".format(label))
+            incomplete_marker(payload).unlink()
+        except (OSError, ValueError) as exc:
+            return _abort_port(auto, "Step 3 failed: {}: {}".format(label, exc))
     log_write("Step 3: Extract payload done")
 
-    # ---------------- Step 4: 解包镜像 ----------------
     info("=== Step 4/7: Unpack IMG ===")
     log_write("Step 4: Unpack IMG start")
-    info("Unpacking source images...")
-    if unpack_all_img(SRC_UNPACK, SRC_FS, "Source") != 0:
-        return _abort_port(auto, "Step 4 failed: source image unpack")
-    log_write("Source images unpacked to: {}".format(SRC_FS))
-    info("Unpacking target images...")
-    if unpack_all_img(TGT_UNPACK, TGT_FS, "Target") != 0:
-        return _abort_port(auto, "Step 4 failed: target image unpack")
-    log_write("Target images unpacked to: {}".format(TGT_FS))
-    info("Step 4 done")
+    for label, archive, rom, payload, filesystem in sides:
+        try:
+            rebuild_filesystem(filesystem)
+            if unpack_all_img(payload, filesystem, label) != 0:
+                return _abort_port(auto, "Step 4 failed: {} image unpack".format(label))
+        except (OSError, ValueError) as exc:
+            return _abort_port(auto, "Step 4 failed: {}: {}".format(label, exc))
     log_write("Step 4: Unpack IMG done")
 
     # ---------------- Step 5: 迁移 ----------------
@@ -1243,11 +1334,11 @@ def one_click_port(auto=False):
     info("Format: {} , Compression: {} level {}".format(
         pack_cfg["format"], pack_cfg["compression"], pack_cfg["compression_level"]))
     info("Cleaning packed directory...")
-    for old in PACK_OUT.glob("*.img"):
-        try:
+    try:
+        for old in PACK_OUT.glob("*.img"):
             old.unlink()
-        except Exception:
-            pass
+    except OSError as exc:
+        return _abort_port(auto, "Step 6 failed: cannot remove old packed image: {}".format(exc))
 
     # 传递打包环境变量给 pack_partitions.py
     os.environ["XMAPORT_UTC_STAMP"] = str(pack_cfg.get("utc_stamp", ""))
